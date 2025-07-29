@@ -1,0 +1,132 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>qml;cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>qrc;rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="Form Files">
+      <UniqueIdentifier>{99349809-55BA-4b9d-BF79-8FDBB0286EB3}</UniqueIdentifier>
+      <Extensions>ui</Extensions>
+    </Filter>
+    <Filter Include="Translation Files">
+      <UniqueIdentifier>{639EADAA-A684-42e4-A9AD-28FC9BCB8F7C}</UniqueIdentifier>
+      <Extensions>ts</Extensions>
+    </Filter>
+    <Filter Include="Header Files\screen">
+      <UniqueIdentifier>{c95f42a1-0922-4bc2-ae63-b3b1f0089e14}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\touch">
+      <UniqueIdentifier>{25c81e0d-7032-48f9-9b46-b15ab8978efc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\mumu">
+      <UniqueIdentifier>{5fded2c3-d30d-4df7-b718-b773a07f1a36}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\player">
+      <UniqueIdentifier>{64f565e7-b817-4741-9506-621874efa957}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\window">
+      <UniqueIdentifier>{a97c0d24-e3bf-4a9c-83fb-9d719f6dee02}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\common">
+      <UniqueIdentifier>{149b2145-04bc-46eb-af89-d5b53f2e0e7f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\mumu">
+      <UniqueIdentifier>{3e9a5a7f-96da-443c-936a-f4c85aa14f43}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\touch">
+      <UniqueIdentifier>{d5a73b30-801d-4a18-87f0-b2a18b237952}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\common">
+      <UniqueIdentifier>{8a49530b-0ae1-48a7-8e83-4deef1517bbc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\player">
+      <UniqueIdentifier>{77dbe7e2-15e6-438c-8ca9-88254331e618}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\window">
+      <UniqueIdentifier>{d3a16261-c3bf-4cbc-8239-8e03ec4390aa}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <QtRcc Include="pjsk_helper.qrc">
+      <Filter>Resource Files</Filter>
+    </QtRcc>
+    <QtUic Include="pjsk_helper.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="i_screen.h">
+      <Filter>Header Files\screen</Filter>
+    </ClInclude>
+    <ClInclude Include="i_touch.h">
+      <Filter>Header Files\touch</Filter>
+    </ClInclude>
+    <ClInclude Include="mini_touch_client.h">
+      <Filter>Header Files\touch</Filter>
+    </ClInclude>
+    <ClInclude Include="external_renderer_ipc.h">
+      <Filter>Header Files\mumu</Filter>
+    </ClInclude>
+    <ClInclude Include="mumu_client.h">
+      <Filter>Header Files\mumu</Filter>
+    </ClInclude>
+    <ClInclude Include="mumu_lib_loader.h">
+      <Filter>Header Files\mumu</Filter>
+    </ClInclude>
+    <ClInclude Include="auto_player.h">
+      <Filter>Header Files\player</Filter>
+    </ClInclude>
+    <ClInclude Include="framework.h">
+      <Filter>Header Files\common</Filter>
+    </ClInclude>
+    <ClInclude Include="ring_buffer.hpp">
+      <Filter>Header Files\common</Filter>
+    </ClInclude>
+    <ClInclude Include="input-event-codes.h">
+      <Filter>Header Files\mumu</Filter>
+    </ClInclude>
+    <ClInclude Include="range_list.hpp">
+      <Filter>Header Files\common</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="mumu_client.cpp">
+      <Filter>Source Files\mumu</Filter>
+    </ClCompile>
+    <ClCompile Include="mumu_lib_loader.cpp">
+      <Filter>Source Files\mumu</Filter>
+    </ClCompile>
+    <ClCompile Include="i_touch.cpp">
+      <Filter>Source Files\touch</Filter>
+    </ClCompile>
+    <ClCompile Include="framework.cpp">
+      <Filter>Source Files\common</Filter>
+    </ClCompile>
+    <ClCompile Include="auto_player.cpp">
+      <Filter>Source Files\player</Filter>
+    </ClCompile>
+    <ClCompile Include="mini_touch_client.cpp">
+      <Filter>Source Files\touch</Filter>
+    </ClCompile>
+    <ClCompile Include="main_window.cpp">
+      <Filter>Source Files\window</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="main_window.h">
+      <Filter>Header Files\window</Filter>
+    </QtMoc>
+  </ItemGroup>
+</Project>
