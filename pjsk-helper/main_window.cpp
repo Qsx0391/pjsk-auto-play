@@ -8,6 +8,9 @@
 #include <QComboBox>
 #include <QSettings>
 #include <QCloseEvent>
+#include <QFile>
+#include <QDataStream>
+#include <QDir>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     SetupUi();
@@ -30,23 +33,25 @@ void MainWindow::LoadSettings() {
 
     // Mumu settings
     mumu_path_edit_->setText(
-        settings.value("mumu/path", "E:/Program Files/Netease/MuMu Player 12")
-            .toString());
-    mumu_inst_spin_->setValue(settings.value("mumu/instance", 0).toInt());
-    adb_port_spin_->setValue(settings.value("mumu/adb_port", 16384).toInt());
+        settings.value("mumu/path", kDefaultMumuPath).toString());
+    mumu_inst_spin_->setValue(
+        settings.value("mumu/instance", kDefaultMumuInstance).toInt());
+    adb_port_spin_->setValue(
+        settings.value("mumu/adb_port", kDefaultAdbPort).toInt());
     package_name_edit_->setText(
-        settings.value("mumu/package", "default").toString());
+        settings.value("mumu/package", kDefaultPackageName).toString());
 
+    const auto& pc = psh::kDefaultPlayConfig;
     // Play settings
-    max_color_dist_spin_->setValue(
-        settings.value("play/max_color_dist", 100).toInt());
-    tap_delay_spin_->setValue(settings.value("play/tap_delay", 2110).toInt());
-    slide_delay_spin_->setValue(
-        settings.value("play/slide_delay", 2110).toInt());
+    color_delta_spin_->setValue(
+        settings.value("play/color_delta", pc.color_delta).toInt());
+    hit_delay_spin_->setValue(
+        settings.value("play/hit_delay", pc.hit_delay_ms).toInt());
     tap_duration_spin_->setValue(
-        settings.value("play/tap_duration", 20).toInt());
+        settings.value("play/tap_duration", pc.tap_duration_ms).toInt());
     check_loop_delay_spin_->setValue(
-        settings.value("play/check_loop_delay", 10).toInt());
+        settings.value("play/check_loop_delay", pc.check_loop_delay_ms)
+            .toInt());
 }
 
 void MainWindow::SaveSettings() {
@@ -59,9 +64,8 @@ void MainWindow::SaveSettings() {
     settings.setValue("mumu/package", package_name_edit_->text());
 
     // Play settings
-    settings.setValue("play/max_color_dist", max_color_dist_spin_->value());
-    settings.setValue("play/tap_delay", tap_delay_spin_->value());
-    settings.setValue("play/slide_delay", slide_delay_spin_->value());
+    settings.setValue("play/color_delta", color_delta_spin_->value());
+    settings.setValue("play/hit_delay", hit_delay_spin_->value());
     settings.setValue("play/tap_duration", tap_duration_spin_->value());
     settings.setValue("play/check_loop_delay", check_loop_delay_spin_->value());
 }
@@ -106,20 +110,15 @@ void MainWindow::SetupUi() {
     auto config_group = new QGroupBox("播放设置", this);
     auto config_layout = new QFormLayout(config_group);
 
-    max_color_dist_spin_ = new QSpinBox(this);
-    max_color_dist_spin_->setRange(1, 255);
-    max_color_dist_spin_->setValue(100);
-    config_layout->addRow("最大颜色距离：", max_color_dist_spin_);
+    color_delta_spin_ = new QSpinBox(this);
+    color_delta_spin_->setRange(1, 255);
+    color_delta_spin_->setValue(100);
+    config_layout->addRow("最大颜色距离：", color_delta_spin_);
 
-    tap_delay_spin_ = new QSpinBox(this);
-    tap_delay_spin_->setRange(0, 10000);
-    tap_delay_spin_->setValue(2110);
-    config_layout->addRow("点击延迟(ms)：", tap_delay_spin_);
-
-    slide_delay_spin_ = new QSpinBox(this);
-    slide_delay_spin_->setRange(0, 10000);
-    slide_delay_spin_->setValue(2110);
-    config_layout->addRow("滑动延迟(ms)：", slide_delay_spin_);
+    hit_delay_spin_ = new QSpinBox(this);
+    hit_delay_spin_->setRange(0, 10000);
+    hit_delay_spin_->setValue(2110);
+    config_layout->addRow("点击延迟(ms)：", hit_delay_spin_);
 
     tap_duration_spin_ = new QSpinBox(this);
     tap_duration_spin_->setRange(1, 100);
@@ -170,42 +169,30 @@ void MainWindow::OnMumuPathButtonClicked() {
     }
 }
 
-psh::AutoPlayer::PlayConfig MainWindow::GetPlayConfig() const {
-    psh::AutoPlayer::PlayConfig config{};
-    config.max_color_dist = max_color_dist_spin_->value();
-    config.tap_delay_ms = tap_delay_spin_->value();
-    config.slide_delay_ms = slide_delay_spin_->value();
+psh::PlayConfig MainWindow::GetPlayConfig() const {
+    psh::PlayConfig config{};
+    config.hold_cnt = 6;
+    config.color_delta = color_delta_spin_->value();
     config.tap_duration_ms = tap_duration_spin_->value();
     config.check_loop_delay_ms = check_loop_delay_spin_->value();
+    config.hit_delay_ms = hit_delay_spin_->value();
     return config;
 }
 
 void MainWindow::InitAutoPlayer() {
-    // 创建Mumu客户端
     mumu_client_ = std::make_unique<psh::MumuClient>(
         mumu_path_edit_->text(), mumu_inst_spin_->value(),
         package_name_edit_->text());
 
-    // 启动 MiniTouch 服务
-    psh::MiniTouchClient::StartMiniTouchService(mumu_path_edit_->text(),
-                                                adb_port_spin_->value(), 3912);
+    note_estimator_ = std::make_unique<psh::NoteTimeEstimator>(
+        psh::kDefaultTrackConfig.check_upper_y,
+        psh::kDefaultTrackConfig.check_lower_y);
 
-    // 创建MiniTouch客户端
-    /*mini_touch_client_ =
-        std::make_unique<psh::MiniTouchClient>("127.0.0.1", 3912);*/
+    psh::TrackConfig track_config = psh::kDefaultTrackConfig;
 
-    // 配置触控设置
-    psh::AutoPlayer::TouchConfig tap_config{*mumu_client_, {1, 2, 3, 4}};
-    psh::AutoPlayer::TouchConfig hold_config{*mumu_client_,
-                                             {5, 6, 7, 8, 9, 10}};
-
-    // 创建轨道配置
-    psh::AutoPlayer::TrackConfig track_config =
-        psh::AutoPlayer::kDefaultTrackConfig;
-
-    // 创建自动播放器
     auto_player_ = std::make_unique<psh::AutoPlayer>(
-        tap_config, hold_config, *mumu_client_, track_config, GetPlayConfig());
+        *mumu_client_, *mumu_client_, *mumu_client_, *mumu_client_,
+        *note_estimator_, track_config, GetPlayConfig());
 }
 
 void MainWindow::OnStartButtonClicked() {

@@ -1,59 +1,35 @@
 #include "auto_player.h"
 
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
+
+#include "psh_utils.hpp"
 
 namespace psh {
 
-AutoPlayer::AutoPlayer(const TouchConfig& tap, const TouchConfig& hold,
-                       IScreen& screen, const TrackConfig& track_config,
+AutoPlayer::AutoPlayer(ITouch& tap_touch, ITouch& hold_touch,
+                       ITouch& slide_touch, IScreen& screen,
+                       NoteTimeEstimator& note_estimator,
+                       const TrackConfig& track_config,
                        const PlayConfig& play_config)
-    : tap_(tap), hold_(hold), screen_(screen) {
+    : tap_touch_(tap_touch),
+      hold_touch_(hold_touch),
+      slide_touch_(slide_touch),
+      screen_(screen),
+      note_estimator_(note_estimator) {
     SetTrackConfig(track_config);
     SetPlayConfig(play_config);
 }
 
-void AutoPlayer::SetPlayConfig(const PlayConfig& play_config) {
-    const PlayConfig& pc = play_config;
-    if (pc.max_color_dist < 0 || pc.tap_delay_ms < 0 || pc.slide_delay_ms < 0 ||
-        pc.tap_duration_ms < 0 || pc.check_loop_delay_ms < 0) {
-        throw std::invalid_argument("Invalid play config values");
-    }
-
-    tap_delay_ms_ = pc.tap_delay_ms;
-    slide_delay_ms_ = pc.slide_delay_ms;
-    tap_duration_ms_ = pc.tap_duration_ms;
-    check_loop_delay_ns_ = MsToNs(pc.check_loop_delay_ms);
-
-    int mcd = pc.max_color_dist;
-    max_color_dist_square_ = mcd * mcd;
+void AutoPlayer::SetTrackConfig(const TrackConfig& track_config) {
+    tc_ = track_config;
 }
 
-void AutoPlayer::SetTrackConfig(const TrackConfig& track_config) {
-    const TrackConfig& tc = track_config;
-    auto BuildLine = [&](int line_height) -> Line {
-        int a = (tc.lower_len - tc.upper_len) * line_height / tc.height;
-        return Line{Point{tc.dx + a / 2, tc.height - line_height},
-                    tc.lower_len - a};
-    };
-    auto Check = [](Point p, int width, int height) -> bool {
-        return p.x >= 0 && p.x < width && p.y >= 0 && p.y < height;
-    };
-
-    check_line_ = BuildLine(tc.check_line_height);
-    hit_line_ = BuildLine(tc.hit_line_height);
-
-    int height = screen_.GetDisplayHeight();
-    int width = screen_.GetDisplayWidth();
-    if (!Check(check_line_.Left(), width, height) ||
-        !Check(check_line_.Right(), width, height)) {
-        throw std::invalid_argument(
-            "Invalid track config: check line out of bounds");
+void AutoPlayer::SetPlayConfig(const PlayConfig& play_config) {
+    if (play_config.color_delta < 0 || play_config.tap_duration_ms < 0 ||
+        play_config.check_loop_delay_ms < 0 || play_config.hit_delay_ms < 0) {
+        throw std::invalid_argument("Invalid play config values");
     }
-    if (!Check(hit_line_.Left(), width, height) ||
-        !Check(hit_line_.Right(), width, height)) {
-        throw std::invalid_argument(
-            "Invalid track config: hit line out of bounds");
-    }
+    pc_ = play_config;
 }
 
 bool AutoPlayer::Start() {
@@ -61,7 +37,6 @@ bool AutoPlayer::Start() {
         spdlog::warn("Auto play already running");
         return false;
     }
-    PreAutoPlayStart();
     run_flag_.store(true, std::memory_order_release);
     check_worker_ = std::thread([&] { CheckLoop(); });
     spdlog::info("Start auto play");
@@ -73,202 +48,98 @@ void AutoPlayer::Stop() {
     if (check_worker_.joinable()) {
         check_worker_.join();
     }
-    if (touch_worker_.joinable()) {
-        touch_worker_.join();
-    }
     AfterAutoPlayStop();
     spdlog::info("Stop auto play");
 }
 
-void AutoPlayer::TestCheckLine() {
-    cv::Mat image = screen_.Screencap();
-    for (int i = 0; i < check_line_.length; ++i) {
-        Point p = check_line_.PosOf(i);
-        cv::circle(image, cv::Point(p.x, p.y), 5, cv::Scalar(0, 255, 0), -1);
-    }
-    cv::line(image, cv::Point(hit_line_.pos.x, hit_line_.pos.y),
-             cv::Point(hit_line_.pos.x + hit_line_.length, hit_line_.pos.y),
-             cv::Scalar(255, 0, 0), 2);
-    cv::imshow("TestCheckPoints", image);
-    cv::waitKey(0);
-}
-
-void AutoPlayer::PreAutoPlayStart() {
-    hold_touch_started_ = false;
-    check_ranges_ = RangeList<CheckInfo>(0, check_line_.length - 1,
-                                         CheckInfo::BuildBlank());
-
-    unused_slots_ = {};
-    for (int index : tap_.slot_indexs) {
-        unused_slots_.push(index);
-    }
-}
-
-void AutoPlayer::StartHoldTouch() {
-    int hold_cnt = hold_.slot_indexs.size();
-    auto hold_ranges = hit_line_.Split(hold_cnt);
-    for (int i = 0; i < hold_cnt; ++i) {
-        const Line& cur = hold_ranges[i];
-        hold_.touch.TouchDown(cur.PosOf(cur.length / 2), hold_.slot_indexs[i]);
+void AutoPlayer::StartHoldTouch(const HrLine& hit_line) {
+    int n = pc_.hold_cnt;
+    auto hold_ranges = hit_line.Split(n);
+    for (int i = 0; i < n; ++i) {
+        int slot_index = hold_touch_.TouchDown(hold_ranges[i].PosOf(0.5));
+        if (slot_index == -1) {
+            spdlog::warn("No available slots for hold touch");
+        }
     }
 }
 
 void AutoPlayer::AfterAutoPlayStop() {
-    for (int index : tap_.slot_indexs) {
-        tap_.touch.TouchUp(index);
-    }
-    for (int index : hold_.slot_indexs) {
-        hold_.touch.TouchUp(index);
-    }
+    tap_touch_.TouchUpAll();
+    hold_touch_.TouchUpAll();
+    slide_touch_.TouchUpAll();
 }
 
 void AutoPlayer::CheckLoop() {
-    int64_t next_check_time = GetCurrentTimeNs();
+    NoteFinder note_finder(pc_.color_delta);
+    TrackController track(tc_, note_finder, note_estimator_);
+
+    int64_t check_time_ms = GetCurrentTimeMs();
+    bool is_hold_started = false;
 
     while (run_flag_) {
-        int64_t cur_time = GetCurrentTimeNs();
+        int64_t cur_time_ms = GetCurrentTimeMs();
 
-        if (cur_time >= next_check_time) {
-            next_check_time += check_loop_delay_ns_;
-            ProcessCheckRanges(cur_time);
-            DetectNodes(cur_time);
+        if (cur_time_ms >= check_time_ms) {
+            check_time_ms += pc_.check_loop_delay_ms;
+
+            for (int i = 0; i < notes_.size();) {
+                int64_t hit_time_ms = notes_[i].HitTimeMs() + pc_.hit_delay_ms;
+                if (track.IsOutSideCheckRange(cur_time_ms, hit_time_ms)) {
+                    cv::Point pos{notes_[i].HitX(), tc_.hit_line_y};
+                    int64_t delay_ms = hit_time_ms - cur_time_ms;
+                    if (notes_[i].type == NoteType::Tap ||
+                        notes_[i].type == NoteType::Hold) {
+                        tap_touch_.TouchTapAsyn(pos, kTapDurationMs, delay_ms);
+                    } else {
+                        slide_touch_.TouchSlideAsyn(
+                            pos, pos + cv::Point{0, kSlideMoveDY},
+                            kSlideDurationMs, kSlideStepDelayMs, 1.0, 1.0,
+                            delay_ms);
+                    }
+                    std::swap(notes_[i], notes_.back());
+                    notes_.pop_back();
+                } else {
+                    ++i;
+                }
+            }
+
+            if (!is_hold_started && !notes_.empty()) {
+                StartHoldTouch(track.GetHitLine());
+                is_hold_started = true;
+            }
+
+            cv::Mat capture_img = screen_.Screencap();
+            cur_time_ms = GetCurrentTimeMs();
+            auto new_notes = track.FindNotes(cur_time_ms, capture_img);
+            for (const auto& new_note : new_notes) {
+                bool is_new = true;
+                for (const auto& note : notes_) {
+                    if (note.type == new_note.type &&
+                        std::abs(note.HitX() - new_note.hit_x) < kMinNoteDX &&
+                        std::abs(note.HitTimeMs() - new_note.hit_time_ms) <
+                            kMinNoteTimeDistMs) {
+                        is_new = false;
+                        break;
+                    }
+                }
+
+                if (is_new) {
+                    /*
+                    spdlog::debug(
+                        "New note found: type={}, hit_x={}, hit_time_ms={}",
+                        NoteTypeToString(new_note.type).toUtf8().constData(),
+                        new_note.hit_x, new_note.hit_time_ms);
+                    */
+                    notes_.push_back(NoteSample{new_note.type, new_note.hit_x,
+                                                new_note.hit_time_ms, 1});
+                }
+            }
         }
 
         auto wait_time =
-            std::max(kMinLoopWaitTimeNs, next_check_time - cur_time);
-        std::this_thread::sleep_for(std::chrono::nanoseconds(wait_time));
+            std::max(kMinLoopWaitTimeMs, check_time_ms - cur_time_ms);
+        std::this_thread::sleep_for(std::chrono::milliseconds(wait_time));
     }
-}
-
-AutoPlayer::CheckInfo AutoPlayer::BuildCheckInfo(int64_t cur_time, int begin,
-                                                 int end, const Color& color) {
-    CheckInfo ret{};
-    ret.time_update = cur_time + kMinNodeTimeDistNs;
-    if (unused_slots_.empty()) {
-        spdlog::warn("No available slots for touch");
-        ret.slot_index = CheckInfo::kNoSlotIndex;
-        return ret;
-    }
-
-    ret.slot_index = unused_slots_.front();
-    unused_slots_.pop();
-    Point hit_pos = hit_line_.PosOf(check_line_, (begin + end - 1) / 2);
-    if (CheckIsSlide(color)) {
-        tap_.touch.DelayTouchSlide(
-            slide_delay_ms_, hit_pos, hit_pos + Point{0, kSlideMoveDY},
-            ret.slot_index, kSlideDurationMs, kSlideStepDelayMs);
-    } else {
-        tap_.touch.DelayTouchTap(tap_delay_ms_, hit_pos, ret.slot_index,
-                                 kTapDurationMs);
-    }
-    return ret;
-}
-
-void AutoPlayer::DetectNodes(int64_t cur_time) {
-    capture_img_ = screen_.Screencap();
-    for (int i = 0; i < check_ranges_.Size(); ++i) {
-        auto& cur = *check_ranges_[i].data;
-        if (!cur.IsBlank()) {
-            continue;
-        }
-
-        int cur_begin = check_ranges_[i].GetBegin();
-        int cur_end = check_ranges_[i].GetEnd();
-
-        for (int i = cur_begin; i <= cur_end;) {
-            Point p = check_line_.PosOf(i);
-            cv::Vec3b color = capture_img_.at<Color>(p.y, p.x);
-            auto node_color_opt = FindClosestNode(color);
-            if (!node_color_opt.has_value()) {
-                ++i;
-                continue;
-            }
-
-            int j = i + 1;
-            for (; j <= cur_end; ++j) {
-                p = check_line_.PosOf(j);
-                cv::Vec3b cur_color = capture_img_.at<Color>(p.y, p.x);
-                if (!AreColorsClose(*node_color_opt, cur_color)) {
-                    break;
-                }
-            }
-            if (j - i < kMinNodeWidth) {
-                i = j;
-                continue;
-            }
-
-            if (!hold_touch_started_) {
-                StartHoldTouch();
-            }
-
-            CheckInfo info =
-                BuildCheckInfo(cur_time, i, j - 1, *node_color_opt);
-            check_ranges_.Insert(i, j - 1, info);
-            spdlog::debug("Detected node from {} to {}: ({}, {}, {})", i, j - 1,
-                          (*node_color_opt)[0], (*node_color_opt)[1],
-                          (*node_color_opt)[2]);
-
-            i = j;
-        }
-    }
-}
-
-void AutoPlayer::ProcessCheckRanges(int64_t cur_time) {
-    bool merge_needed = false;
-    for (int i = 0; i < check_ranges_.Size(); ++i) {
-        auto& cur = *check_ranges_[i].data;
-
-        if (!cur.IsBlank() && cur_time >= cur.time_update) {
-            if (cur.slot_index != CheckInfo::kNoSlotIndex) {
-                unused_slots_.push(cur.slot_index);
-            }
-            cur.slot_index = CheckInfo::kBlankSlotIndex;
-            merge_needed = true;
-        }
-    }
-
-    if (merge_needed) {
-        check_ranges_.Merge();
-    }
-}
-
-bool AutoPlayer::AreColorsClose(const Color& color1,
-                                const Color& color2) const {
-    int db = color1[0] - color2[0];
-    int dg = color1[1] - color2[1];
-    int dr = color1[2] - color2[2];
-    return (db * db + dg * dg + dr * dr) <= max_color_dist_square_;
-};
-
-std::optional<AutoPlayer::Color> AutoPlayer::FindClosestNode(
-    const Color& color) const {
-    int index = -1;
-    int min_dist = INT_MAX;
-    for (int i = 0; i < kNodeColors.size(); ++i) {
-        int db = color[0] - kNodeColors[i][0];
-        int dg = color[1] - kNodeColors[i][1];
-        int dr = color[2] - kNodeColors[i][2];
-        int cur_diff = db * db + dg * dg + dr * dr;
-        if (cur_diff < min_dist) {
-            min_dist = cur_diff;
-            index = i;
-        }
-    }
-    if (min_dist <= max_color_dist_square_) {
-        return kNodeColors[index];
-    }
-    return std::nullopt;
-}
-
-bool AutoPlayer::CheckIsSlide(const Color& color) {
-    return color == kSlideNodeColor || color == kYellowNodeColor;
-}
-
-int64_t AutoPlayer::GetCurrentTimeNs() {
-    return static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
 }
 
 } // namespace psh

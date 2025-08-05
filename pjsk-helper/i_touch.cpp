@@ -3,6 +3,8 @@
 #include <thread>
 #include <cmath>
 
+#include "spdlog/spdlog.h"
+
 namespace {
 
 int64_t GetCurrentTimeNs() {
@@ -26,7 +28,13 @@ int Lerp(int a, int b, double t) { return static_cast<int>(a + (b - a) * t); };
 
 namespace psh {
 
-ITouch::ITouch() {
+ITouch::ITouch(int slot_index_begin, int slot_index_end)
+    : slot_index_begin_(slot_index_begin),
+      slot_index_end_(slot_index_end),
+      unused_slots_(slot_index_end - slot_index_begin + 1) {
+    for (int i = slot_index_begin; i <= slot_index_end; ++i) {
+        unused_slots_.insert(i);
+    }
     touch_thread_ = std::thread([this]() { ProcessTouchTasksLoop(); });
 }
 
@@ -38,30 +46,53 @@ ITouch::~ITouch() {
     }
 }
 
-void ITouch::TouchTap(Point pos, int slot_id, int duration_ms) {
-    TouchDown(pos, slot_id);
+int ITouch::GetSlot() {
+    if (unused_slots_.empty()) {
+        return -1;
+    }
+    auto slot = unused_slots_.begin();
+    int slot_index = *slot;
+    unused_slots_.erase(slot);
+    return slot_index;
+}
+
+void ITouch::ReleaseSlot(int slot_index) { unused_slots_.insert(slot_index); }
+
+void ITouch::TouchUpAll() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    touch_tasks_ = {};
+    for (int i = slot_index_begin_; i <= slot_index_end_; ++i) {
+        if (unused_slots_.find(i) == unused_slots_.end()) {
+            TouchUp(i);
+        }
+    }
+}
+
+void ITouch::TouchTap(cv::Point pos, int duration_ms) {
+    int slot_index = TouchDown(pos);
+    if (slot_index == -1) {
+        throw std::runtime_error("No available slots for touch");
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(duration_ms));
-    TouchUp(slot_id);
+    TouchUp(slot_index);
 }
 
-void ITouch::TouchTapAsyn(Point pos, int slot_id, int duration_ms) {
-    TouchDown(pos, slot_id);
-    AddTouchTask(GetCurrentTimeNs() + MsToNs(duration_ms), Point{}, slot_id,
-                 TouchType::Up);
-}
-
-void ITouch::DelayTouchTap(int delay_ms, Point pos, int slot_id,
-                           int duration_ms) {
+void ITouch::TouchTapAsyn(cv::Point pos, int duration_ms, int delay_ms) {
     int64_t execute_time_ns = GetCurrentTimeNs() + MsToNs(delay_ms);
-    AddTouchTask(execute_time_ns, pos, slot_id, TouchType::Down);
-    AddTouchTask(execute_time_ns + MsToNs(duration_ms), Point{}, slot_id,
-                 TouchType::Up);
+    auto task = std::make_unique<TouchTask>();
+    task->Add(TouchType::Down, pos, execute_time_ns);
+    task->Add(TouchType::Up, cv::Point{},
+              execute_time_ns + MsToNs(duration_ms));
+    AddTouchTask(std::move(task));
 }
 
-void psh::ITouch::TouchSlide(Point from, Point to, int slot_id, int duration_ms,
+void psh::ITouch::TouchSlide(cv::Point from, cv::Point to, int duration_ms,
                              int step_delay_ms, double slope_in,
                              double slope_out) {
-    TouchDown(from, slot_id);
+    int slot_index = TouchDown(from);
+    if (slot_index == -1) {
+        throw std::runtime_error("No available slots for touch");
+    }
     for (int cur_duration_ms = step_delay_ms; cur_duration_ms <= duration_ms;
          cur_duration_ms += step_delay_ms) {
         double progress =
@@ -70,38 +101,19 @@ void psh::ITouch::TouchSlide(Point from, Point to, int slot_id, int duration_ms,
         int cur_x = static_cast<int>(Lerp(from.x, to.x, progress));
         int cur_y = static_cast<int>(Lerp(from.y, to.y, progress));
         std::this_thread::sleep_for(std::chrono::milliseconds(step_delay_ms));
-        TouchMove({cur_x, cur_y}, slot_id);
+        TouchMove({cur_x, cur_y}, slot_index);
     }
-    TouchUp(slot_id);
+    TouchUp(slot_index);
 }
 
-void ITouch::TouchSlideAsyn(Point from, Point to, int slot_id, int duration_ms,
+void ITouch::TouchSlideAsyn(cv::Point from, cv::Point to, int duration_ms,
                             int step_delay_ms, double slope_in,
-                            double slope_out) {
-    int64_t cur_time_ns = GetCurrentTimeNs();
-    int64_t step_delay_ns = MsToNs(step_delay_ms);
-    int64_t duration_ns = MsToNs(duration_ms);
-    TouchDown(from, slot_id);
-    for (int cur_duration_ns = step_delay_ns; cur_duration_ns <= duration_ns;
-         cur_duration_ns += step_delay_ns) {
-        double progress =
-            CubicSpline(slope_in, slope_out,
-                        static_cast<double>(cur_duration_ns) / duration_ns);
-        int cur_x = static_cast<int>(Lerp(from.x, to.x, progress));
-        int cur_y = static_cast<int>(Lerp(from.y, to.y, progress));
-        AddTouchTask(cur_time_ns + cur_duration_ns, {cur_x, cur_y}, slot_id,
-                     TouchType::Move);
-    }
-    AddTouchTask(cur_time_ns + duration_ns, Point{}, slot_id, TouchType::Up);
-}
-
-void ITouch::DelayTouchSlide(int delay_ms, Point from, Point to, int slot_id,
-                             int duration_ms, int step_delay_ms,
-                             double slope_in, double slope_out) {
+                            double slope_out, int delay_ms) {
     int64_t execute_time_ns = GetCurrentTimeNs() + MsToNs(delay_ms);
     int64_t step_delay_ns = MsToNs(step_delay_ms);
     int64_t duration_ns = MsToNs(duration_ms);
-    AddTouchTask(execute_time_ns, from, slot_id, TouchType::Down);
+    auto task = std::make_unique<TouchTask>();
+    task->Add(TouchType::Down, from, execute_time_ns);
     for (int cur_duration_ns = step_delay_ns; cur_duration_ns <= duration_ns;
          cur_duration_ns += step_delay_ns) {
         double progress =
@@ -109,28 +121,49 @@ void ITouch::DelayTouchSlide(int delay_ms, Point from, Point to, int slot_id,
                         static_cast<double>(cur_duration_ns) / duration_ns);
         int cur_x = static_cast<int>(Lerp(from.x, to.x, progress));
         int cur_y = static_cast<int>(Lerp(from.y, to.y, progress));
-        AddTouchTask(execute_time_ns + cur_duration_ns, {cur_x, cur_y}, slot_id,
-                     TouchType::Move);
+        task->Add(TouchType::Move, cv::Point{cur_x, cur_y},
+                  execute_time_ns + cur_duration_ns);
     }
-    AddTouchTask(execute_time_ns + duration_ns, Point{}, slot_id,
-                 TouchType::Up);
+    task->Add(TouchType::Up, cv::Point{}, execute_time_ns + duration_ns);
+    AddTouchTask(std::move(task));
 }
 
-void ITouch::AddTouchTask(int64_t execute_time_ns, Point pos, int slot_index,
-                          TouchType type) {
+void ITouch::AddTouchTask(std::unique_ptr<TouchTask> task) {
     std::lock_guard<std::mutex> lock(mutex_);
-    touch_tasks_.push(TouchTask{execute_time_ns, pos, slot_index, type});
-    if (touch_tasks_.size() == 1 ||
-        execute_time_ns < touch_tasks_.top().execute_time_ns) {
+    if (touch_tasks_.empty() ||
+        (*task)->execute_time_ns < (*touch_tasks_.top())->execute_time_ns) {
         cv_.notify_one();
     }
+    touch_tasks_.push(std::move(task));
 }
 
-void ITouch::ProcessTouch(const TouchTask &task) {
-    switch (task.type) {
-        case TouchType::Down: TouchDown(task.pos, task.slot_index); break;
-        case TouchType::Up: TouchUp(task.slot_index); break;
-        case TouchType::Move: TouchMove(task.pos, task.slot_index); break;
+void ITouch::ProcessTouch(TouchTask &task, int64_t cur_time_ns) {
+    while (task.HasNext() && cur_time_ns >= task->execute_time_ns) {
+        switch (task->type) {
+            case TouchType::Down:
+                task.SetSlotIndex(TouchDown(task->pos));
+                if (task.GetSlotIndex() != -1) {
+                    spdlog::info("Touch down at ({}, {}) on slot {}",
+                                 task->pos.x, task->pos.y, task.GetSlotIndex());
+                } else {
+                    do {
+                        task.Next();
+                    } while (task.HasNext() && task->type != TouchType::Down);
+                    spdlog::warn("No available slots for touch");
+                }
+                break;
+            case TouchType::Up:
+                if (task.GetSlotIndex() != -1) {
+                    TouchUp(task.GetSlotIndex());
+                }
+                break;
+            case TouchType::Move:
+                if (task.GetSlotIndex() != -1) {
+                    TouchMove(task->pos, task.GetSlotIndex());
+                }
+                break;
+        }
+        task.Next();
     }
 }
 
@@ -143,18 +176,20 @@ void ITouch::ProcessTouchTasksLoop() {
         }
 
         auto cur_time_ns = GetCurrentTimeNs();
-        if (touch_tasks_.top().execute_time_ns > cur_time_ns) {
-            cv_.wait_for(lock,
-                         std::chrono::nanoseconds(
-                             touch_tasks_.top().execute_time_ns - cur_time_ns));
+        if ((*touch_tasks_.top())->execute_time_ns > cur_time_ns) {
+            cv_.wait_for(lock, std::chrono::nanoseconds(
+                                   (*touch_tasks_.top())->execute_time_ns -
+                                   cur_time_ns));
             continue;
         }
 
-        auto task = touch_tasks_.top();
+        auto task = std::move(const_cast<std::unique_ptr<TouchTask>&>(touch_tasks_.top()));
         touch_tasks_.pop();
+        ProcessTouch(*task, cur_time_ns);
+        if (task->HasNext()) {
+            touch_tasks_.push(std::move(task));
+        }
         lock.unlock();
-
-        ProcessTouch(task);
     }
 }
 

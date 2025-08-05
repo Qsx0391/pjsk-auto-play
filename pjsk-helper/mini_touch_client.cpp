@@ -17,7 +17,7 @@ namespace psh {
 
 MiniTouchClient::MiniTouchClient(const QString& host, int port,
                                  int screen_height)
-    : screen_height_(screen_height) {
+    : ITouch(kSlotIndexBegin, kSlotIndexBegin), screen_height_(screen_height) {
     WSADATA wsa_data;
     int ret = WSAStartup(MAKEWORD(2, 2), &wsa_data);
     if (ret != 0) {
@@ -49,16 +49,25 @@ MiniTouchClient::~MiniTouchClient() {
     WSACleanup();
 }
 
-void MiniTouchClient::TouchDown(Point pos, int tid) {
-    MiniTouchCommand(*this).D(tid, pos).C().Send();
+int MiniTouchClient::TouchDown(cv::Point pos) {
+    int slot_index = GetSlot();
+    if (slot_index == -1) {
+        MiniTouchCommand(*this).D(slot_index, pos).C().Send();
+    }
+    return slot_index;
 }
 
-void MiniTouchClient::TouchUp(int tid) {
-    MiniTouchCommand(*this).U(tid).C().Send();
+void MiniTouchClient::TouchUp(int slot_index) {
+    if (slot_index != -1) {
+        MiniTouchCommand(*this).U(slot_index).C().Send();
+        ReleaseSlot(slot_index);
+    }
 }
 
-void MiniTouchClient::TouchMove(Point pos, int tid) {
-    MiniTouchCommand(*this).M(tid, pos).Send();
+void MiniTouchClient::TouchMove(cv::Point pos, int slot_index) {
+    if (slot_index != -1) {
+        MiniTouchCommand(*this).M(slot_index, pos).Send();
+    }
 }
 
 void MiniTouchClient::Close() {
@@ -168,7 +177,7 @@ MiniTouchClient::MiniTouchCommand& MiniTouchClient::MiniTouchCommand::U(
 }
 
 MiniTouchClient::MiniTouchCommand& MiniTouchClient::MiniTouchCommand::D(
-    int tid, Point pos) {
+    int tid, cv::Point pos) {
     buffer_ += "d " + std::to_string(tid) + " " +
                std::to_string(touch_.TouchY(pos.y)) + " " +
                std::to_string(pos.x) + " 50\n";
@@ -176,7 +185,7 @@ MiniTouchClient::MiniTouchCommand& MiniTouchClient::MiniTouchCommand::D(
 }
 
 MiniTouchClient::MiniTouchCommand& MiniTouchClient::MiniTouchCommand::M(
-    int tid, Point pos) {
+    int tid, cv::Point pos) {
     buffer_ += "m " + std::to_string(tid) + " " +
                std::to_string(touch_.TouchY(pos.y)) + " " +
                std::to_string(pos.x) + " 50\n";

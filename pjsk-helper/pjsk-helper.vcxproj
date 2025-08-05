@@ -103,27 +103,35 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="auto_player.h" />
+    <ClInclude Include="auto_play_config.h" />
     <ClInclude Include="external_renderer_ipc.h" />
-    <ClInclude Include="framework.h" />
+    <ClInclude Include="hr_line.h" />
     <ClInclude Include="input-event-codes.h" />
     <ClInclude Include="i_screen.h" />
     <ClInclude Include="i_touch.h" />
     <ClInclude Include="mini_touch_client.h" />
     <ClInclude Include="mumu_client.h" />
     <ClInclude Include="mumu_lib_loader.h" />
+    <ClInclude Include="note_finder.h" />
     <ClInclude Include="range_list.hpp" />
     <ClInclude Include="ring_buffer.hpp" />
+    <ClInclude Include="track_controller.h" />
+    <ClInclude Include="psh_utils.hpp" />
+    <ClInclude Include="note_time_estimator.h" />
     <QtMoc Include="main_window.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="auto_player.cpp" />
-    <ClCompile Include="framework.cpp" />
+    <ClCompile Include="hr_line.cpp" />
     <ClCompile Include="i_touch.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="main_window.cpp" />
     <ClCompile Include="mini_touch_client.cpp" />
     <ClCompile Include="mumu_client.cpp" />
     <ClCompile Include="mumu_lib_loader.cpp" />
+    <ClCompile Include="note_finder.cpp" />
+    <ClCompile Include="note_time_estimator.cpp" />
+    <ClCompile Include="track_controller.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">

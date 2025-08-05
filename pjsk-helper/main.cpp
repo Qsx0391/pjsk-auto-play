@@ -5,6 +5,7 @@
 #include "mini_touch_client.h"
 #include "mumu_client.h"
 #include "auto_player.h"
+#include "note_time_estimator.h"
 
 #include "main_window.h"
 
@@ -16,24 +17,33 @@ static auto BuildMiniTouchClient() {
     return MiniTouchClient("127.0.0.1", 3912);
 }
 
-static void TestTouch(ITouch &touch) {
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    touch.TouchDown({500, 500}, 1);
-    std::this_thread::sleep_for(std::chrono::seconds(5));
-    touch.TouchUp(1);
-    for (int i = 0; i < 5; ++i) {
-        touch.TouchTap({500, 500}, 1, 20);
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    for (int i = 0; i < 5; ++i) {
-        touch.TouchSlideAsyn({100, 300}, {600, 300}, 1, 100);
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
+static auto BuildAutoPlayer(MumuClient &mumu, NoteTimeEstimator &estimator) {
+    return AutoPlayer(mumu, mumu, mumu, mumu, estimator, kDefaultTrackConfig,
+                      kDefaultPlayConfig);
 }
 
 static auto BuildMumuClient() {
     return MumuClient("E:/Program Files/Netease/MuMu Player 12", 0, "default");
+}
+
+static auto BuildNoteFinder() { return NoteFinder(); }
+
+static auto BuildNoteTimeEstimator(IScreen &screen, NoteFinder &finder) {
+    return NoteTimeEstimator(kDefaultTrackConfig.check_upper_y,
+                             kDefaultTrackConfig.check_lower_y);
+}
+
+static void TestTouch(ITouch &touch) {
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    for (int i = 0; i < 10; ++i) {
+        touch.TouchTapAsyn({100, 100}, 20, 500);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    for (int i = 0; i < 10; ++i) {
+        touch.TouchSlideAsyn({100, 100}, {600, 100}, 100, 5, 1.0, 1.0, 500);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
 }
 
 static void TestScreen(IScreen &screen) {
@@ -41,13 +51,6 @@ static void TestScreen(IScreen &screen) {
     cv::imshow("Mumu Screen", img);
     cv::waitKey(0);
 }
-
-//static auto BuildAutoPlayer(MumuClient &mumu, MiniTouchClient &mini_touch) {
-//    return AutoPlayer({mumu, {1, 2, 3, 4}}, {mumu, {5, 6, 7, 8, 9, 10}},
-//                      {mini_touch, {0, 1, 2, 3, 4, 5}}, mumu,
-//                      AutoPlayer::kDefaultTrackConfig,
-//                      AutoPlayer::kDefaultPlayConfig);
-//}
 
 static void TestAutoPlayer(AutoPlayer &player) {
     player.Start();
@@ -69,13 +72,11 @@ int main(int argc, char *argv[]) {
     spdlog::set_level(spdlog::level::debug);
     // auto minitouch = psh::test::BuildMiniTouchClient();
     // auto mumu = psh::test::BuildMumuClient();
-    // auto player = psh::test::BuildAutoPlayer(mumu, mumu, mumu);
+    // auto player = psh::test::BuildAutoPlayer(mumu);
+    // auto finder = psh::test::BuildNoteFinder();
+    // auto estimator = psh::test::BuildNoteTimeEstimator(mumu, finder);
+    // psh::test::TestTouch(mumu);
 
     return StartQt(argc, argv);
-    // psh::test::TestTouch(mumu);
-    // psh::test::TestScreen(mumu);
-    // player.TestCheckLine();
-    // player.TestTouch();
-    // psh::test::TestAutoPlayer(player);
     // return 0;
 }

@@ -7,20 +7,24 @@
 #include <mutex>
 #include <qstring.h>
 
+#include <opencv2/opencv.hpp>
+
 #include "i_touch.h"
-#include "framework.h"
 
 namespace psh {
 
 class MiniTouchClient : public ITouch {
 public:
+    static const int kSlotIndexBegin = 0;
+    static const int kSlotIndexEnd = 9;
+
     class MiniTouchCommand {
     public:
         MiniTouchCommand(MiniTouchClient& touch);
 
-        MiniTouchCommand& U(int slot_id);
-        MiniTouchCommand& D(int slot_id, Point pos);
-        MiniTouchCommand& M(int slot_id, Point pos);
+        MiniTouchCommand& U(int slot_index);
+        MiniTouchCommand& D(int slot_index, cv::Point pos);
+        MiniTouchCommand& M(int slot_index, cv::Point pos);
         MiniTouchCommand& C();
         void Send();
 
@@ -33,9 +37,9 @@ public:
                     int screen_height = 720);
     virtual ~MiniTouchClient();
 
-    void TouchDown(Point pos, int slot_id) override;
-    void TouchUp(int slot_id) override;
-    void TouchMove(Point pos, int slot_id) override;
+    int TouchDown(cv::Point pos) override;
+    void TouchUp(int slot_index) override;
+    void TouchMove(cv::Point pos, int slot_index) override;
 
     void Close();
 

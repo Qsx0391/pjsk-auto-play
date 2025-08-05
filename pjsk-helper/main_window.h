@@ -17,6 +17,8 @@
 #include "auto_player.h"
 #include "mumu_client.h"
 #include "mini_touch_client.h"
+#include "note_time_estimator.h"
+#include "note_finder.h"
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -34,12 +36,17 @@ private slots:
     void OnMumuPathButtonClicked();
 
 private:
+    inline static const QString kDefaultMumuPath = "";
+    static const int kDefaultMumuInstance = 0;
+    static const int kDefaultAdbPort = 16384;
+    inline static const QString kDefaultPackageName = "default";
+
     void SetupUi();
     void CreateConnections();
     void InitAutoPlayer();
     void LoadSettings();
     void SaveSettings();
-    psh::AutoPlayer::PlayConfig GetPlayConfig() const;
+    psh::PlayConfig GetPlayConfig() const;
 
     // UI elements
     QWidget *central_widget_;
@@ -55,9 +62,8 @@ private:
     QLineEdit *package_name_edit_;
 
     // Play settings
-    QSpinBox *max_color_dist_spin_;
-    QSpinBox *tap_delay_spin_;
-    QSpinBox *slide_delay_spin_;
+    QSpinBox *color_delta_spin_;
+    QSpinBox *hit_delay_spin_;
     QSpinBox *tap_duration_spin_;
     QSpinBox *check_loop_delay_spin_;
 
@@ -65,4 +71,5 @@ private:
     std::unique_ptr<psh::AutoPlayer> auto_player_;
     std::unique_ptr<psh::MumuClient> mumu_client_;
     std::unique_ptr<psh::MiniTouchClient> mini_touch_client_;
+    std::unique_ptr<psh::NoteTimeEstimator> note_estimator_;
 };

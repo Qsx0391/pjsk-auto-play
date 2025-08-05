@@ -6,7 +6,7 @@ namespace psh {
 
 MumuClient::MumuClient(const QString& mumu_path_str, int mumu_inst_index,
                        const QString& package_name)
-    : package_name_(package_name) {
+    : ITouch(kSlotIndexBegin, kSlotIndexEnd), package_name_(package_name) {
     std::filesystem::path mumu_path = mumu_path_str.toUtf8().constData();
     inited_ = Mumu::Init(mumu_path) &&
               ConnectMumu(mumu_path, mumu_inst_index) && InitScreencap();
@@ -41,14 +41,27 @@ cv::Mat MumuClient::Screencap() {
     return dst;
 }
 
-void MumuClient::TouchDown(Point pos, int slot_id) {
-    Mumu::InputEventFingerTouchDown(mumu_handle_, GetDisplayId(),
-                                             slot_id, pos.x, pos.y);
+int MumuClient::TouchDown(cv::Point pos) {
+    int slot_index = GetSlot();
+    if (slot_index != -1) {
+        Mumu::InputEventFingerTouchDown(mumu_handle_, GetDisplayId(),
+                                        slot_index, pos.x, pos.y);
+    }
+    return slot_index;
 }
 
-void MumuClient::TouchUp(int slot_id) {
-    Mumu::InputEventFingerTouchUp(mumu_handle_, GetDisplayId(),
-                                           slot_id);
+void MumuClient::TouchUp(int slot_index) {
+    if (slot_index != -1) {
+        Mumu::InputEventFingerTouchUp(mumu_handle_, GetDisplayId(), slot_index);
+        ReleaseSlot(slot_index);
+    }
+}
+
+void MumuClient::TouchMove(cv::Point pos, int slot_index) {
+    if (slot_index != -1) {
+        Mumu::InputEventFingerTouchDown(mumu_handle_, GetDisplayId(),
+                                        slot_index, pos.x, pos.y);
+    }
 }
 
 void MumuClient::KeyDown(int key) {
