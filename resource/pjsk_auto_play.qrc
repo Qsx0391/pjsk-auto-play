@@ -1,0 +1,10 @@
+<RCC>
+    <qresource prefix="PJSKAutoPlay">
+        <file>img/song_playing/song_playing_1.png</file>
+        <file>img/song_start/song_start_1.png</file>
+        <file>img/song_start/song_start_2.png</file>
+        <file>img/multi_play_begin/multi_play_begin_1.png</file>
+        <file>img/multi_play_song_choose/multi_play_song_choose_1.png</file>
+        <file>img/multi_play_song_choose/multi_play_song_choose_2.png</file>
+    </qresource>
+</RCC>

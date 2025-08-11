@@ -1,0 +1,100 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "Qt-Debug",
+      "inherits": "Qt-Default",
+      "displayName": "Qt Debug",
+      "description": "Debug build with Qt support",
+      "binaryDir": "${sourceDir}/out/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "Qt-Release",
+      "inherits": "Qt-Default",
+      "displayName": "Qt Release",
+      "description": "Release build with Qt support",
+      "binaryDir": "${sourceDir}/out/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "Qt-RelWithDebInfo",
+      "inherits": "Qt-Default",
+      "displayName": "Qt RelWithDebInfo",
+      "description": "Release build with debug info",
+      "binaryDir": "${sourceDir}/out/build/relwithdebinfo",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "hidden": true,
+      "name": "Qt-Default",
+      "inherits": "qt6.9.1",
+      "vendor": {
+        "qt-project.org/Default": {
+          "checksum": "lH3sUe9Vp5ARle3mpXQzGg1pv/Y="
+        }
+      }
+    },
+    {
+      "hidden": true,
+      "name": "qt6.9.1",
+      "inherits": "Qt",
+      "environment": {
+        "QTDIR": "E:/Qt/6.9.1/msvc2022_64"
+      },
+      "architecture": {
+        "strategy": "external",
+        "value": "x64"
+      },
+      "generator": "Ninja",
+      "vendor": {
+        "qt-project.org/Version": {
+          "checksum": "2M24+MUHgWXOHdNd8l9GW2ORb7g="
+        }
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "Qt-Debug-Build",
+      "configurePreset": "Qt-Debug",
+      "displayName": "Build Qt Debug",
+      "description": "Build debug configuration"
+    },
+    {
+      "name": "Qt-Release-Build",
+      "configurePreset": "Qt-Release",
+      "displayName": "Build Qt Release",
+      "description": "Build release configuration"
+    },
+    {
+      "name": "Qt-RelWithDebInfo-Build",
+      "configurePreset": "Qt-RelWithDebInfo",
+      "displayName": "Build Qt RelWithDebInfo",
+      "description": "Build release with debug info configuration"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "Qt-Debug-Test",
+      "configurePreset": "Qt-Debug",
+      "displayName": "Test Qt Debug"
+    },
+    {
+      "name": "Qt-Release-Test",
+      "configurePreset": "Qt-Release",
+      "displayName": "Test Qt Release"
+    }
+  ],
+  "vendor": {
+    "qt-project.org/Presets": {
+      "checksum": "l0AXwJn4bocoSftFcSeRPBka+OQ="
+    }
+  }
+}
