@@ -15,9 +15,43 @@
 #include <QSplitter>
 #include <QGroupBox>
 #include <QScrollBar>
+#include <QScrollArea>
+#include <QTimer>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+
+#include "player/display_manager.h"
+
+namespace {
+
+template <typename Tuple, std::size_t... I>
+void addLabelAndComboImpl(QBoxLayout* parent, Tuple&& tup,
+                          std::index_sequence<I...>) {
+    auto addOne = [parent](const QString& text, QComboBox* combo) {
+        auto* hlayout = new QHBoxLayout;
+        hlayout->setSpacing(0);
+        hlayout->setContentsMargins(0, 0, 0, 0);
+
+        auto* label = new QLabel(text);
+        hlayout->addWidget(label);
+        hlayout->addWidget(combo, 1);
+
+        parent->addLayout(hlayout);
+    };
+
+    (addOne(std::get<2 * I>(tup), std::get<2 * I + 1>(tup)), ...);
+}
+
+template <typename... Args>
+void addLabelAndCombo(QBoxLayout* parent, Args&&... args) {
+    static_assert(sizeof...(args) % 2 == 0, "参数必须成对出现: label, combo");
+    auto tup = std::make_tuple(std::forward<Args>(args)...);
+    constexpr size_t N = sizeof...(args) / 2;
+    addLabelAndComboImpl(parent, tup, std::make_index_sequence<N>{});
+}
+
+} // namespace
 
 namespace psh {
 
@@ -36,20 +70,58 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     spdlog::set_default_logger(logger);
 
     spdlog::info("PJSK Auto Play 已启动");
+
+    // 连接 SusLoader 信号
+    QObject::connect(
+        &psh::SusLoader::Instance(), &psh::SusLoader::LoadStarted, this,
+        [this]() {
+            QMetaObject::invokeMethod(
+                this, [this]() { sus_title_label_->setText("已加载: -"); },
+                Qt::QueuedConnection);
+        });
+    QObject::connect(
+        &psh::SusLoader::Instance(), &psh::SusLoader::SusUpdated, this,
+        [this](std::shared_ptr<psh::SusLoader::SusResult> r) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, r]() {
+                    sus_title_label_->setText("已加载: " + r->title +
+                                              " 难度: " + r->difficulty);
+                },
+                Qt::QueuedConnection);
+        });
+    QObject::connect(
+        &psh::SusLoader::Instance(), &psh::SusLoader::MatchesUpdated, this,
+        [this](const std::vector<std::pair<SusLoader::SongInfo, double>>&
+                   matches) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, matches]() {
+                    sus_matches_cache_ = matches;
+                    sus_matches_combo_->clear();
+                    for (const auto& [song, sim] : matches) {
+                        sus_matches_combo_->addItem(song.title);
+                    }
+                    sus_match_diff_combo_->clear();
+                    if (!matches.empty()) {
+                        for (const auto& d :
+                             matches.front().first.difficulties) {
+                            sus_match_diff_combo_->addItem(d);
+                        }
+                    }
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 MainWindow::~MainWindow() = default;
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (auto_player_) {
-        if (auto_check_enabled_checkbox_->isChecked()) {
-            auto_player_->AutoCheckStop();
-        } else {
-            auto_player_->Stop();
-        }
+        auto_player_->Stop();
     }
-    if (multi_controller_) {
-        multi_controller_->Stop();
+    if (story_reader_) {
+        story_reader_->Stop();
     }
     SaveSettings();
     event->accept();
@@ -58,37 +130,27 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 void MainWindow::LoadSettings() {
     QSettings settings("PJSKAutoPlay");
 
-    // Mumu settings
     mumu_path_edit_->setText(
         settings.value("mumu/path", kDefaultMumuPath).toString());
     mumu_inst_spin_->setValue(
         settings.value("mumu/instance", kDefaultMumuInstance).toInt());
-    // adb_port_spin_->setValue(
-    //     settings.value("mumu/adb_port", kDefaultAdbPort).toInt());
-    // package_name_edit_->setText(
-    //     settings.value("mumu/package", kDefaultPackageName).toString());
 
-    // Play settings
-    const auto& pc = kDefaultPlayConfig;
-    color_delta_spin_->setValue(
-        settings.value("play/color_delta", pc.color_delta).toInt());
-    hit_delay_spin_->setValue(
-        settings.value("play/hit_delay", pc.hit_delay_ms).toInt());
-    tap_duration_spin_->setValue(
-        settings.value("play/tap_duration", pc.tap_duration_ms).toInt());
+    const auto& pc = PlayConfig{};
+    cv_hit_delay_spin_->setValue(
+        settings.value("play/cv_hit_delay", pc.cv_hit_delay_ms).toInt());
+    sus_hit_delay_spin_->setValue(
+        settings.value("play/sus_hit_delay", pc.sus_hit_delay_ms).toInt());
     sample_freq_spin_->setValue(
         settings.value("play/sample_freq", 1000 / pc.check_loop_delay_ms)
             .toInt());
 
-    // 画面显示设置
-    img_show_checkbox_->setChecked(
-        settings.value("play/img_show", false).toBool());
+    img_show_checkbox_->setChecked(false);
+    sus_mode_checkbox_->setChecked(
+        settings.value("play/sus_mode", pc.sus_mode).toBool());
+    speed_factor_combo_->setCurrentText(
+        settings.value("play/speed_factor", "10.00").toString());
+    play_mode_combo_->setCurrentIndex(settings.value("play/mode", 0).toInt());
 
-    // Auto check settings
-    auto_check_enabled_checkbox_->setChecked(
-        settings.value("auto_check/enabled", false).toBool());
-
-    // 协力设置
     multi_mode_combo_->setCurrentIndex(settings.value("multi/mode", 0).toInt());
     multi_max_diff_combo_->setCurrentIndex(
         settings.value("multi/max_diff", 4).toInt());
@@ -97,191 +159,189 @@ void MainWindow::LoadSettings() {
 void MainWindow::SaveSettings() {
     QSettings settings("PJSKAutoPlay");
 
-    // Mumu settings
     settings.setValue("mumu/path", mumu_path_edit_->text());
     settings.setValue("mumu/instance", mumu_inst_spin_->value());
-    // settings.setValue("mumu/adb_port", adb_port_spin_->value());
-    // settings.setValue("mumu/package", package_name_edit_->text());
 
-    // Play settings
-    settings.setValue("play/color_delta", color_delta_spin_->value());
-    settings.setValue("play/hit_delay", hit_delay_spin_->value());
-    settings.setValue("play/tap_duration", tap_duration_spin_->value());
+    settings.setValue("play/cv_hit_delay", cv_hit_delay_spin_->value());
+    settings.setValue("play/sus_hit_delay", sus_hit_delay_spin_->value());
     settings.setValue("play/sample_freq", sample_freq_spin_->value());
-    settings.setValue("play/img_show", img_show_checkbox_->isChecked());
+    settings.setValue("play/speed_factor", speed_factor_combo_->currentText());
+    settings.setValue("play/sus_mode", sus_mode_checkbox_->isChecked());
+    settings.setValue("play/mode", play_mode_combo_->currentIndex());
 
-    // Auto check settings
-    settings.setValue("auto_check/enabled",
-                      auto_check_enabled_checkbox_->isChecked());
-
-    // 协力设置
     settings.setValue("multi/mode", multi_mode_combo_->currentIndex());
     settings.setValue("multi/max_diff", multi_max_diff_combo_->currentIndex());
 }
 
 void MainWindow::SetupUi() {
-    // 创建中央部件
     central_widget_ = new QWidget(this);
     setCentralWidget(central_widget_);
 
-    // 创建主分割器
     main_splitter_ = new QSplitter(Qt::Horizontal, central_widget_);
     auto main_layout = new QHBoxLayout(central_widget_);
+    main_layout->setContentsMargins(8, 8, 8, 8);
     main_layout->addWidget(main_splitter_);
 
-    // 创建左侧控制面板
-    auto left_widget = new QWidget();
-    auto left_layout = new QVBoxLayout(left_widget);
+    // ================= 左侧 =================
+    auto left_scroll = new QScrollArea();
+    left_scroll->setWidgetResizable(true);
+    auto left_container = new QWidget();
+    auto left_layout = new QVBoxLayout(left_container);
+    left_layout->setSpacing(12); // group 之间留空隙
+    left_scroll->setWidget(left_container);
 
-    // Mumu设置
-    auto mumu_group = new QGroupBox("模拟器设置", this);
+    // ---- 模拟器设置 ----
+    auto mumu_group = new QGroupBox("mumu模拟器设置");
     auto mumu_layout = new QFormLayout(mumu_group);
+    mumu_layout->setLabelAlignment(Qt::AlignRight);
 
+    auto mumu_path_layout = new QHBoxLayout();
     mumu_path_edit_ =
         new QLineEdit("E:/Program Files/Netease/MuMu Player 12", this);
     mumu_path_button_ = new QPushButton("浏览...", this);
-    auto mumu_path_layout = new QHBoxLayout();
     mumu_path_layout->addWidget(mumu_path_edit_);
     mumu_path_layout->addWidget(mumu_path_button_);
+    mumu_layout->addRow("安装路径：", mumu_path_layout);
 
     mumu_inst_spin_ = new QSpinBox(this);
-    mumu_inst_spin_->setRange(0, 9);
-    mumu_inst_spin_->setValue(0);
-
-    /*
-    adb_port_spin_ = new QSpinBox(this);
-    adb_port_spin_->setRange(1024, 65535);
-    adb_port_spin_->setValue(16384);
-    */
-
-    // package_name_edit_ = new QLineEdit("default", this);
-
-    mumu_layout->addRow("mumu安装路径：", mumu_path_layout);
+    mumu_inst_spin_->setRange(0, 1024);
     mumu_layout->addRow("实例编号：", mumu_inst_spin_);
-    // mumu_layout->addRow("ADB端口：", adb_port_spin_);
-    // mumu_layout->addRow("包名：", package_name_edit_);
-
     left_layout->addWidget(mumu_group);
 
-    // 播放设置
-    auto config_group = new QGroupBox("播放设置", this);
+    // ---- 自动打歌 ----
+    auto config_group = new QGroupBox("自动打歌");
     auto config_layout = new QFormLayout(config_group);
+    config_layout->setLabelAlignment(Qt::AlignRight);
 
-    color_delta_spin_ = new QSpinBox(this);
-    color_delta_spin_->setRange(1, 255);
-    color_delta_spin_->setValue(10);
-    config_layout->addRow("颜色容差：", color_delta_spin_);
+    cv_hit_delay_spin_ = new QSpinBox(this);
+    cv_hit_delay_spin_->setRange(-1000, 1000);
+    config_layout->addRow("CV 点击延迟(ms)：", cv_hit_delay_spin_);
 
-    hit_delay_spin_ = new QSpinBox(this);
-    hit_delay_spin_->setRange(-1000, 1000);
-    hit_delay_spin_->setValue(0);
-    config_layout->addRow("点击延迟(ms)：", hit_delay_spin_);
-
-    tap_duration_spin_ = new QSpinBox(this);
-    tap_duration_spin_->setRange(1, 100);
-    tap_duration_spin_->setValue(20);
-    config_layout->addRow("点击持续时间(ms)：", tap_duration_spin_);
+    sus_hit_delay_spin_ = new QSpinBox(this);
+    sus_hit_delay_spin_->setRange(-1000, 1000);
+    config_layout->addRow("SUS 点击延迟(ms)：", sus_hit_delay_spin_);
 
     sample_freq_spin_ = new QSpinBox(this);
     sample_freq_spin_->setRange(1, 1000);
     sample_freq_spin_->setValue(50);
-    config_layout->addRow("检查频率(hz)：", sample_freq_spin_);
+    config_layout->addRow("检查频率(Hz)：", sample_freq_spin_);
 
-    left_layout->addWidget(config_group);
+    speed_factor_combo_ = new QComboBox(this);
+    speed_factor_combo_->addItems({"6.00", "8.00", "9.00", "10.00", "11.00"});
+    config_layout->addRow("流速：", speed_factor_combo_);
 
-    // Auto Check 设置
-    auto auto_check_group = new QGroupBox("自动打歌控制", this);
-    auto auto_check_layout = new QVBoxLayout(auto_check_group);
+    play_mode_combo_ = new QComboBox(this);
+    play_mode_combo_->addItems({"单次", "单人模式", "协力模式"});
+    config_layout->addRow("游戏模式：", play_mode_combo_);
 
-    auto_check_enabled_checkbox_ = new QCheckBox("启用自动检测", this);
-    auto_check_layout->addWidget(auto_check_enabled_checkbox_);
-
-    // 画面显示开关
+    auto config_checkbox_layout = new QHBoxLayout();
+    sus_mode_checkbox_ = new QCheckBox("启用 SUS 模式", this);
     img_show_checkbox_ = new QCheckBox("显示画面", this);
-    img_show_checkbox_->setChecked(false);
-    auto_check_layout->addWidget(img_show_checkbox_);
+    config_checkbox_layout->addWidget(sus_mode_checkbox_);
+    config_checkbox_layout->addWidget(img_show_checkbox_);
+    config_checkbox_layout->addStretch();
+    config_layout->addRow(config_checkbox_layout);
 
     auto start_stop_layout = new QHBoxLayout();
     start_button_ = new QPushButton("开始", this);
     stop_button_ = new QPushButton("停止", this);
     stop_button_->setEnabled(false);
-
     start_stop_layout->addWidget(start_button_);
     start_stop_layout->addWidget(stop_button_);
+    config_layout->addRow(start_stop_layout);
 
-    auto_check_layout->addLayout(start_stop_layout);
+    left_layout->addWidget(config_group);
 
-    left_layout->addWidget(auto_check_group);
-
-    // 协力自动控制设置
-    auto multi_group = new QGroupBox("协力自动控制", this);
-    auto multi_layout = new QFormLayout(multi_group);
-
+    // ---- 协力控制 ----
+    auto multi_group = new QGroupBox("协力控制");
+    auto multi_layout = new QHBoxLayout(multi_group);
     multi_mode_combo_ = new QComboBox(this);
-    multi_mode_combo_->addItems(
-        {"固定难度", "优先未通关", "优先非FC", "优先非AP"});
-
+    multi_mode_combo_->addItems({"固定难度", "自动选择"});
     multi_max_diff_combo_ = new QComboBox(this);
     multi_max_diff_combo_->addItems(
         {"Easy", "Normal", "Hard", "Expert", "Master", "Append"});
-    multi_max_diff_combo_->setCurrentIndex(2); // 默认 Hard
-
-    auto multi_btn_layout = new QHBoxLayout();
-    multi_start_button_ = new QPushButton("开始协力", this);
-    multi_stop_button_ = new QPushButton("停止协力", this);
-    multi_stop_button_->setEnabled(false);
-
-    multi_btn_layout->addWidget(multi_start_button_);
-    multi_btn_layout->addWidget(multi_stop_button_);
-
-    multi_layout->addRow("模式：", multi_mode_combo_);
-    multi_layout->addRow("最大难度：", multi_max_diff_combo_);
-    multi_layout->addRow(multi_btn_layout);
-
+    multi_max_diff_combo_->setCurrentIndex(2);
+    addLabelAndCombo(multi_layout, "难度选择：", multi_mode_combo_,
+                     "最大难度：", multi_max_diff_combo_);
     left_layout->addWidget(multi_group);
 
-    // 状态标签
+    // ---- 自动阅读 ----
+    auto story_group = new QGroupBox("自动阅读");
+    auto story_layout = new QHBoxLayout(story_group);
+    story_start_button_ = new QPushButton("开始", this);
+    story_stop_button_ = new QPushButton("停止", this);
+    story_stop_button_->setEnabled(false);
+    story_layout->addWidget(story_start_button_);
+    story_layout->addWidget(story_stop_button_);
+    left_layout->addWidget(story_group);
+
+    // ---- SUS 加载 ----
+    auto sus_group = new QGroupBox("SUS 加载");
+    auto sus_layout = new QVBoxLayout(sus_group);
+    sus_title_label_ = new QLabel("已加载: -", this);
+    // 手动输入歌名
+    auto sus_name_layout = new QHBoxLayout();
+    sus_name_edit_ = new QLineEdit(this);
+    sus_name_edit_->setPlaceholderText("请输入歌曲名...");
+    sus_load_by_name_button_ = new QPushButton("搜索", this);
+    sus_name_layout->addWidget(sus_name_edit_, 3);
+    sus_name_layout->addWidget(sus_load_by_name_button_, 1);
+    sus_layout->addLayout(sus_name_layout);
+    sus_matches_combo_ = new QComboBox(this);
+    sus_match_diff_combo_ = new QComboBox(this);
+    sus_reload_button_ = new QPushButton("重新加载", this);
+    sus_refresh_songs_button_ = new QPushButton("刷新曲库缓存", this);
+
+    auto sus_controls_layout = new QHBoxLayout();
+    sus_controls_layout->addWidget(new QLabel("候选："));
+    sus_controls_layout->addWidget(sus_matches_combo_, 3);
+    sus_controls_layout->addWidget(new QLabel("难度："));
+    sus_controls_layout->addWidget(sus_match_diff_combo_, 1);
+    sus_layout->addLayout(sus_controls_layout);
+
+    sus_layout->addWidget(sus_title_label_);
+
+    auto sus_buttons_layout = new QHBoxLayout();
+    sus_buttons_layout->addWidget(sus_refresh_songs_button_);
+    sus_buttons_layout->addWidget(sus_reload_button_);
+    sus_layout->addLayout(sus_buttons_layout);
+
+    left_layout->addWidget(sus_group);
+
+    // ---- 状态 ----
     status_label_ = new QLabel("状态: 未开始", this);
     left_layout->addWidget(status_label_);
-
-    // 添加弹簧让控件顶端对齐
     left_layout->addStretch();
 
-    // 右侧日志显示区域
+    // ================= 右侧日志 =================
     auto right_widget = new QWidget();
     auto right_layout = new QVBoxLayout(right_widget);
 
-    // 日志控制区域
     auto log_control_layout = new QHBoxLayout();
+    log_control_layout->addWidget(new QLabel("日志级别"));
     log_level_combo_ = new QComboBox(this);
     log_level_combo_->addItems({"Debug", "Info", "Warn", "Error"});
     log_level_combo_->setCurrentText("Info");
-
     clear_log_button_ = new QPushButton("清除日志", this);
-
-    log_control_layout->addWidget(new QLabel("日志级别："));
     log_control_layout->addWidget(log_level_combo_);
     log_control_layout->addStretch();
     log_control_layout->addWidget(clear_log_button_);
-
     right_layout->addLayout(log_control_layout);
 
-    // 日志显示区域
-    log_display_ = new QTextEdit(this);
+    log_display_ = new QPlainTextEdit(this);
     log_display_->setReadOnly(true);
     log_display_->setFont(QFont("Consolas", 9));
-    right_layout->addWidget(log_display_);
+    right_layout->addWidget(log_display_, 1);
 
-    // 添加到分割器
-    main_splitter_->addWidget(left_widget);
+    // ================= 拼接到主分割器 =================
+    main_splitter_->addWidget(left_scroll);
     main_splitter_->addWidget(right_widget);
     main_splitter_->setStretchFactor(0, 0);
     main_splitter_->setStretchFactor(1, 1);
     main_splitter_->setSizes({400, 600});
 
-    // 设置窗口属性
     setWindowTitle("PJSK Auto Play");
-    setMinimumSize(800, 500);
+    setMinimumSize(900, 600);
 }
 
 void MainWindow::CreateConnections() {
@@ -289,20 +349,17 @@ void MainWindow::CreateConnections() {
             &MainWindow::OnStartButtonClicked);
     connect(stop_button_, &QPushButton::clicked, this,
             &MainWindow::OnStopButtonClicked);
+    connect(story_start_button_, &QPushButton::clicked, this,
+            &MainWindow::OnStoryStartButtonClicked);
+    connect(story_stop_button_, &QPushButton::clicked, this,
+            &MainWindow::OnStoryStopButtonClicked);
     connect(mumu_path_button_, &QPushButton::clicked, this,
             &MainWindow::OnMumuPathButtonClicked);
-    connect(auto_check_enabled_checkbox_, &QCheckBox::toggled, this,
-            [this](bool checked) {
-                // 状态变化时的处理逻辑（如果需要的话）
-            });
+    connect(sus_mode_checkbox_, &QCheckBox::toggled, this,
+            [this](bool checked) {});
 
-    // 图片显示开关信号连接
     connect(img_show_checkbox_, &QCheckBox::toggled, this,
-            [this](bool checked) {
-                if (auto_player_) {
-                    auto_player_->SetImgShowFlag(checked);
-                }
-            });
+            &MainWindow::OnImgShowChanged);
 
     connect(log_level_combo_,
             QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -310,11 +367,28 @@ void MainWindow::CreateConnections() {
     connect(clear_log_button_, &QPushButton::clicked, this,
             &MainWindow::OnClearLogClicked);
 
-    // 协力自动控制
-    connect(multi_start_button_, &QPushButton::clicked, this,
-            &MainWindow::OnMultiPlayStartClicked);
-    connect(multi_stop_button_, &QPushButton::clicked, this,
-            &MainWindow::OnMultiPlayStopClicked);
+
+    connect(sus_reload_button_, &QPushButton::clicked, this, [this]() {
+        int idx = sus_matches_combo_->currentIndex();
+        if (idx < 0 || idx >= static_cast<int>(sus_matches_cache_.size()))
+            return;
+        const auto& song = sus_matches_cache_[idx];
+        const QString diff = sus_match_diff_combo_->currentText();
+        psh::SusLoader::LoadSusByName(song.first.title, diff, false, true);
+    });
+
+    connect(sus_refresh_songs_button_, &QPushButton::clicked, this, [this]() {
+        status_label_->setText("状态: 正在刷新曲库缓存...");
+        psh::SusLoader::RefreshSongsCache();
+        QTimer::singleShot(1000, this,
+                           [this]() { status_label_->setText("就绪"); });
+    });
+
+    // 手动按歌名加载：按钮点击与回车
+    connect(sus_load_by_name_button_, &QPushButton::clicked, this,
+            &MainWindow::OnSusLoadByNameClicked);
+    connect(sus_name_edit_, &QLineEdit::returnPressed, this,
+            &MainWindow::OnSusLoadByNameClicked);
 }
 
 void MainWindow::OnMumuPathButtonClicked() {
@@ -327,115 +401,142 @@ void MainWindow::OnMumuPathButtonClicked() {
     }
 }
 
+void MainWindow::OnImgShowChanged(bool checked) {
+    if (auto_player_) {
+        if (checked) {
+            DisplayManager::StartDisplay();
+        } else {
+            DisplayManager::StopDisplay();
+        }
+    }
+}
+
 PlayConfig MainWindow::GetPlayConfig() const {
-    PlayConfig config{};
-    config.hold_cnt = 6;
-    config.color_delta = color_delta_spin_->value();
-    config.tap_duration_ms = tap_duration_spin_->value();
-    config.check_loop_delay_ms = sample_freq_spin_->value() / 1000;
-    config.hit_delay_ms = hit_delay_spin_->value();
-    return config;
+    PlayConfig pc{};
+    pc.hold_cnt = 6;
+    pc.check_loop_delay_ms = 1000 / sample_freq_spin_->value();
+    pc.cv_hit_delay_ms = cv_hit_delay_spin_->value();
+    pc.sus_hit_delay_ms = sus_hit_delay_spin_->value();
+    pc.speed_factor = GetCurrentSpeedFactor();
+    pc.sus_mode = sus_mode_checkbox_->isChecked();
+    pc.auto_select = multi_mode_combo_->currentIndex() == 1;
+
+    switch (multi_max_diff_combo_->currentIndex()) {
+        case 0: pc.max_diff = SongDifficulty::kEasy; break;
+        case 1: pc.max_diff = SongDifficulty::kNormal; break;
+        case 2: pc.max_diff = SongDifficulty::kHard; break;
+        case 3: pc.max_diff = SongDifficulty::kExpert; break;
+        case 4: pc.max_diff = SongDifficulty::kMaster; break;
+        case 5: pc.max_diff = SongDifficulty::kAppend; break;
+    }
+
+    return pc;
+}
+
+SpeedFactor MainWindow::GetCurrentSpeedFactor() const {
+    QString speed_text = speed_factor_combo_->currentText();
+    if (speed_text == "6.00") {
+        return SpeedFactor::kSpeed6x;
+    } else if (speed_text == "8.00") {
+        return SpeedFactor::kSpeed8x;
+    } else if (speed_text == "9.00") {
+        return SpeedFactor::kSpeed9x;
+    } else if (speed_text == "10.00") {
+        return SpeedFactor::kSpeed10x;
+    } else if (speed_text == "11.00") {
+        return SpeedFactor::kSpeed11x;
+    }
+    return SpeedFactor::kSpeed10x;
+}
+
+PlayMode MainWindow::GetCurrentPlayMode() const {
+    int index = play_mode_combo_->currentIndex();
+    switch (index) {
+        case 0: return PlayMode::kOnce;
+        case 1: return PlayMode::kSolo;
+        case 2: return PlayMode::kMulti;
+        default: return PlayMode::kOnce;
+    }
 }
 
 void MainWindow::InitAutoPlayer() {
-    mumu_client_ = std::make_unique<MumuClient>(
-        mumu_path_edit_->text(), mumu_inst_spin_->value(),
-        MumuClient::kDefaultPackageName);
+    if (auto_player_) {
+        auto_player_->SetPlayConfig(GetPlayConfig());
+        auto_player_->SetPlayMode(GetCurrentPlayMode());
+    } else {
+        InitMumuClient();
 
-    note_estimator_ = std::make_unique<NoteTimeEstimator>(
-        kDefaultTrackConfig.check_upper_y, kDefaultTrackConfig.check_lower_y);
+        auto_player_ = std::make_unique<AutoPlayer>(
+            *touch_controller_, *mumu_client_, TrackConfig{}, GetPlayConfig());
 
-    TrackConfig track_config = kDefaultTrackConfig;
+        QObject::connect(auto_player_.get(), &AutoPlayer::playStopped, this,
+                         [this]() {
+                             QMetaObject::invokeMethod(
+                                 this,
+                                 [this]() {
+                                     UpdateUiOnStopped();
+                                 },
+                                 Qt::QueuedConnection);
+                         });
 
-    auto_player_ = std::make_unique<AutoPlayer>(
-        *mumu_client_, *mumu_client_, *mumu_client_, *mumu_client_,
-        *note_estimator_, track_config, GetPlayConfig());
+        auto_player_->SetPlayMode(GetCurrentPlayMode());
 
-    // 设置画面显示开关
-    auto_player_->SetImgShowFlag(img_show_checkbox_->isChecked());
-
-    // 设置画面显示关闭回调，用于同步复选框状态
-    auto_player_->SetImgShowOffCallback([this]() {
-        QMetaObject::invokeMethod(
-            this, [this]() { img_show_checkbox_->setChecked(false); },
-            Qt::QueuedConnection);
-    });
-
-    // 设置AutoPlayer的回调函数，用于同步按钮状态
-    auto_player_->SetPlayStartCallback([this]() {
-        // 在UI线程中更新按钮状态
-        QMetaObject::invokeMethod(
-            this,
+        QObject::connect(
+            &DisplayManager::Instance(), &DisplayManager::displayOff, this,
             [this]() {
-                if (!auto_check_enabled_checkbox_->isChecked()) {
-                    start_button_->setEnabled(false);
-                    stop_button_->setEnabled(true);
-                    auto_check_enabled_checkbox_->setEnabled(false);
-                    status_label_->setText("运行中...");
-                }
-            },
-            Qt::QueuedConnection);
-    });
+                QMetaObject::invokeMethod(
+                    this, [this]() { img_show_checkbox_->setChecked(false); },
+                    Qt::QueuedConnection);
+            });
+    }
+}
 
-    auto_player_->SetPlayStopCallback([this]() {
-        QMetaObject::invokeMethod(
-            this,
-            [this]() {
-                if (!auto_check_enabled_checkbox_->isChecked()) {
-                    start_button_->setEnabled(true);
-                    stop_button_->setEnabled(false);
-                    auto_check_enabled_checkbox_->setEnabled(true);
-                    status_label_->setText("就绪");
-                }
-            },
-            Qt::QueuedConnection);
-    });
+void MainWindow::InitMumuClient() {
+    if (!mumu_client_) {
+        mumu_client_ = std::make_unique<MumuClient>(
+            mumu_path_edit_->text(), mumu_inst_spin_->value(),
+            MumuClient::kDefaultPackageName);
+        touch_controller_ = std::make_unique<TouchController>(*mumu_client_);
+    }
+}
 
-    auto_player_->SetCheckStartCallback([this]() {
-        QMetaObject::invokeMethod(
-            this,
-            [this]() {
-                start_button_->setEnabled(false);
-                stop_button_->setEnabled(true);
-                auto_check_enabled_checkbox_->setChecked(true);
-                auto_check_enabled_checkbox_->setEnabled(false);
-                status_label_->setText("自动检测中...");
-            },
-            Qt::QueuedConnection);
-    });
+void MainWindow::InitStoryReader() {
+    if (!story_reader_) {
+        InitMumuClient();
+        story_reader_ = std::make_unique<StoryAutoReader>(*touch_controller_);
 
-    auto_player_->SetCheckStopCallback([this]() {
-        QMetaObject::invokeMethod(
-            this,
-            [this]() {
-                start_button_->setEnabled(true);
-                stop_button_->setEnabled(false);
-                auto_check_enabled_checkbox_->setEnabled(true);
-                status_label_->setText("就绪");
-            },
-            Qt::QueuedConnection);
-    });
+        QObject::connect(story_reader_.get(), &StoryAutoReader::stopped, this,
+                         [this]() {
+                             QMetaObject::invokeMethod(
+                                 this,
+                                 [this]() {
+                                     story_start_button_->setEnabled(true);
+                                     story_stop_button_->setEnabled(false);
+                                 },
+                                 Qt::QueuedConnection);
+                         });
+    }
+}
+
+void MainWindow::UpdateUiOnStarted() {
+    start_button_->setEnabled(false);
+    stop_button_->setEnabled(true);
+    status_label_->setText("运行中...");
+}
+
+void MainWindow::UpdateUiOnStopped() {
+    start_button_->setEnabled(true);
+    stop_button_->setEnabled(false);
+    status_label_->setText("就绪");
 }
 
 void MainWindow::OnStartButtonClicked() {
     try {
-        if (!auto_player_) {
-            InitAutoPlayer();
-        } else {
-            auto_player_->SetPlayConfig(GetPlayConfig());
-            auto_player_->SetImgShowFlag(img_show_checkbox_->isChecked());
+        InitAutoPlayer();
+        if (!auto_player_->Start()) {
+            throw std::runtime_error("自动打歌启动失败");
         }
-
-        if (auto_check_enabled_checkbox_->isChecked()) {
-            if (!auto_player_->AutoCheckStart()) {
-                spdlog::warn("自动检测启动失败");
-            }
-        } else {
-            if (!auto_player_->Start()) {
-                throw std::runtime_error("自动播放器启动失败");
-            }
-        }
-
+        UpdateUiOnStarted();
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "错误",
                               QString("启动失败: %1").arg(e.what()));
@@ -445,13 +546,8 @@ void MainWindow::OnStartButtonClicked() {
 void MainWindow::OnStopButtonClicked() {
     try {
         if (auto_player_) {
-            if (auto_check_enabled_checkbox_->isChecked()) {
-                auto_player_->AutoCheckStop();
-            } else {
-                auto_player_->Stop();
-            }
+            auto_player_->Stop();
         }
-
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "错误",
                               QString("停止失败: %1").arg(e.what()));
@@ -460,7 +556,7 @@ void MainWindow::OnStopButtonClicked() {
 
 void MainWindow::AddLogMessage(const QString& message) {
     // 添加时间戳（如果消息中没有的话）
-    log_display_->append(message.trimmed());
+    log_display_->appendPlainText(message.trimmed());
 
     // 自动滚动到底部
     QScrollBar* scrollBar = log_display_->verticalScrollBar();
@@ -490,80 +586,40 @@ void MainWindow::OnClearLogClicked() {
     spdlog::info("日志已清除");
 }
 
-void MainWindow::OnMultiPlayStartClicked() {
+void MainWindow::OnStoryStartButtonClicked() {
     try {
-        if (!auto_player_) {
-            InitAutoPlayer();
+        InitStoryReader();
+        if (!story_reader_->Start()) {
+            throw std::runtime_error("故事自动阅读启动失败");
         }
-        if (!multi_controller_) {
-            multi_controller_ = std::make_unique<MultiPlayController>(
-                *mumu_client_, *mumu_client_, *auto_player_);
-        }
-
-        // 设置MultiPlayController的回调函数，用于同步按钮状态
-        multi_controller_->SetStartCallback([this]() {
-            QMetaObject::invokeMethod(
-                this,
-                [this]() {
-                    multi_start_button_->setEnabled(false);
-                    multi_stop_button_->setEnabled(true);
-                    status_label_->setText("协力运行中...");
-                },
-                Qt::QueuedConnection);
-        });
-
-        multi_controller_->SetStopCallback([this]() {
-            QMetaObject::invokeMethod(
-                this,
-                [this]() {
-                    multi_start_button_->setEnabled(true);
-                    multi_stop_button_->setEnabled(false);
-                    status_label_->setText("就绪");
-                },
-                Qt::QueuedConnection);
-        });
-
-        using Mode = MultiPlayController::PlayMode;
-        using Diff = SongDiffculty;
-
-        Mode mode = Mode::kFixedDifficulty;
-        switch (multi_mode_combo_->currentIndex()) {
-            case 0: mode = Mode::kFixedDifficulty; break;
-            case 1: mode = Mode::kUnclearFirst; break;
-            case 2: mode = Mode::kUnfullComboFirst; break;
-            case 3: mode = Mode::kUnallPerfectFirst; break;
-        }
-
-        Diff max_diff = Diff::kMaster;
-        switch (multi_max_diff_combo_->currentIndex()) {
-            case 0: max_diff = Diff::kEasy; break;
-            case 1: max_diff = Diff::kNormal; break;
-            case 2: max_diff = Diff::kHard; break;
-            case 3: max_diff = Diff::kExpert; break;
-            case 4: max_diff = Diff::kMaster; break;
-            case 5: max_diff = Diff::kAppend; break;
-        }
-
-        if (!multi_controller_->Start(mode, max_diff)) {
-            throw std::runtime_error("协力自动控制启动失败");
-        }
-
+        // 启动成功后更新按钮状态
+        story_start_button_->setEnabled(false);
+        story_stop_button_->setEnabled(true);
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "错误",
-                              QString("协力启动失败: %1").arg(e.what()));
+                              QString("启动失败: %1").arg(e.what()));
     }
 }
 
-void MainWindow::OnMultiPlayStopClicked() {
+void MainWindow::OnStoryStopButtonClicked() {
     try {
-        if (multi_controller_) {
-            multi_controller_->Stop();
+        if (story_reader_) {
+            story_reader_->Stop();
         }
-
     } catch (const std::exception& e) {
         QMessageBox::critical(this, "错误",
-                              QString("协力停止失败: %1").arg(e.what()));
+                              QString("停止失败: %1").arg(e.what()));
     }
+}
+
+void MainWindow::OnSusLoadByNameClicked() {
+    const QString song = sus_name_edit_->text().trimmed();
+    if (song.isEmpty()) {
+        QMessageBox::warning(this, "提示", "请输入歌名");
+        return;
+    }
+    status_label_->setText("状态: 正在按歌名加载...");
+    psh::SusLoader::LoadSusByName(song, "", false, false);
 }
 
 } // namespace psh

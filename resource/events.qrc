@@ -1,0 +1,24 @@
+<RCC>
+    <qresource prefix="/">
+        <file>./events/challenge_play_start/583_627.png</file>
+        <file>./events/challenge_play_start/event.json</file>
+        <file>./events/live_menu/900_150.png</file>
+        <file>./events/live_menu/event.json</file>
+        <file>./events/main_menu/25_25.png</file>
+        <file>./events/main_menu/event.json</file>
+        <file>./events/multi_mode_choosing/655_490.png</file>
+        <file>./events/multi_mode_choosing/event.json</file>
+        <file>./events/multi_play_start/935_630.png</file>
+        <file>./events/multi_play_start/event.json</file>
+        <file>./events/multi_song_choosing/860_520.png</file>
+        <file>./events/multi_song_choosing/event.json</file>
+        <file>./events/multi_song_playing/955_25.png</file>
+        <file>./events/multi_song_playing/event.json</file>
+        <file>./events/solo_play_start/535_625.png</file>
+        <file>./events/solo_play_start/event.json</file>
+        <file>./events/solo_song_choosing/985_575.png</file>
+        <file>./events/solo_song_choosing/event.json</file>
+        <file>./events/solo_song_playing/955_20.png</file>
+        <file>./events/solo_song_playing/event.json</file>
+    </qresource>
+</RCC>

@@ -1,11 +1,11 @@
-#include "mumu_lib_loader.h"
+#include "mumu/mumu_lib_loader.h"
 
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 namespace psh {
 
 template <typename Func>
-bool loadFunction(HMODULE hlib, const std::string& func_name,
+bool LoadFunction(HMODULE hlib, const std::string& func_name,
                   std::function<Func>& target) {
     auto func =
         reinterpret_cast<Func*>(GetProcAddress(hlib, func_name.c_str()));
@@ -22,36 +22,31 @@ bool MumuLibLoader::Init(const std::filesystem::path& mumu_path) {
     std::lock_guard<std::mutex> lock(inst.init_mutex_);
     if (!inst.inited_) {
         auto lib_path = mumu_path / "shell" / "sdk" / "external_renderer_ipc";
-        inst.hlib_ = LoadLibraryW(lib_path.c_str());
-
-        if (!inst.hlib_) {
+        auto new_lib_path = mumu_path / "nx_device" / "12.0" / "shell" / "sdk" /
+                            "external_renderer_ipc.dll";
+        HMODULE hlib;
+        if (!(hlib = LoadLibraryW(lib_path.c_str())) &&
+            !(hlib = LoadLibraryW(new_lib_path.c_str()))) {
             spdlog::error("Failed to load library from {}", lib_path.string());
             return false;
         }
+        inst.hlib_ = hlib;
 
+        // clang-format off
         inst.inited_ =
-            loadFunction(inst.hlib_, kConnectFuncName, inst.connect_func_) &&
-            loadFunction(inst.hlib_, kDisconnectFuncName,
-                         inst.disconnect_func_) &&
-            loadFunction(inst.hlib_, kGetDisplayIdFuncName,
-                         inst.get_display_id_func_) &&
-            loadFunction(inst.hlib_, kCaptureDisplayFuncName,
-                         inst.capture_display_func_) &&
-            loadFunction(inst.hlib_, kInputTextFuncName,
-                         inst.input_text_func_) &&
-            loadFunction(inst.hlib_, kInputEventTouchDown,
-                         inst.input_event_touch_down_func_) &&
-            loadFunction(inst.hlib_, kInputEventTouchUp,
-                         inst.input_event_touch_up_func_) &&
-            loadFunction(inst.hlib_, kInputEventKeyDown,
-                         inst.input_event_key_down_func_) &&
-            loadFunction(inst.hlib_, kInputEventKeyUp,
-                         inst.input_event_key_up_func_) &&
-            loadFunction(inst.hlib_, kInputEventFingerTouchDown,
-                         inst.input_event_finger_touch_down_func_) &&
-            loadFunction(inst.hlib_, kInputEventFingerTouchUp,
-                         inst.input_event_finger_touch_up_func_);
+            LoadFunction(inst.hlib_, kConnectFuncName,           inst.connect_func_                      ) &&
+            LoadFunction(inst.hlib_, kDisconnectFuncName,        inst.disconnect_func_                   ) &&
+            LoadFunction(inst.hlib_, kGetDisplayIdFuncName,      inst.get_display_id_func_               ) &&
+            LoadFunction(inst.hlib_, kCaptureDisplayFuncName,    inst.capture_display_func_              ) &&
+            LoadFunction(inst.hlib_, kInputTextFuncName,         inst.input_text_func_                   ) &&
+            LoadFunction(inst.hlib_, kInputEventTouchDown,       inst.input_event_touch_down_func_       ) &&
+            LoadFunction(inst.hlib_, kInputEventTouchUp,         inst.input_event_touch_up_func_         ) &&
+            LoadFunction(inst.hlib_, kInputEventKeyDown,         inst.input_event_key_down_func_         ) &&
+            LoadFunction(inst.hlib_, kInputEventKeyUp,           inst.input_event_key_up_func_           ) &&
+            LoadFunction(inst.hlib_, kInputEventFingerTouchDown, inst.input_event_finger_touch_down_func_) &&
+            LoadFunction(inst.hlib_, kInputEventFingerTouchUp,   inst.input_event_finger_touch_up_func_  );
         return inst.inited_;
+        // clang-format on
     }
     return true;
 }

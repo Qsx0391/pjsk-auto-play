@@ -1,6 +1,12 @@
-#include "hr_line.h"
+#include "common/hr_line.h"
 
 namespace psh {
+
+bool HrLine::operator==(const HrLine &other) const {
+    return pos == other.pos && length == other.length;
+}
+
+bool HrLine::operator!=(const HrLine &other) const { return !(*this == other); }
 
 std::vector<HrLine> HrLine::Split(int n) const {
     std::vector<HrLine> lines(n);
@@ -13,5 +19,12 @@ std::vector<HrLine> HrLine::Split(int n) const {
     return lines;
 }
 
-} // namespace psh
+cv::Point HrLine::PosOf(double t) const {
+    return pos + cv::Point{static_cast<int>(length * t), 0};
+}
 
+cv::Point HrLine::PosOf(const HrLine &other, cv::Point p) const {
+    return pos + cv::Point{(length * (p.x - other.pos.x) / other.length), 0};
+}
+
+} // namespace psh

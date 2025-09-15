@@ -2,12 +2,8 @@
 
 #include "spdlog/spdlog.h"
 
-#include "mini_touch_client.h"
-#include "mumu_client.h"
-#include "auto_player.h"
-#include "note_time_estimator.h"
-
-#include "main_window.h"
+#include "window/main_window.h"
+#include "test/psh_test.hpp"
 
 static int StartQt(int argc, char *argv[]) {
     QApplication app(argc, argv);
@@ -21,4 +17,5 @@ int main(int argc, char *argv[]) {
     // spdlog::set_level(spdlog::level::debug);
 
     return StartQt(argc, argv);
+    // psh::test::TestTouch();
 }

@@ -23,50 +23,105 @@ if(NOT CMAKE_BUILD_TYPE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
-
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 find_package(OpenCV REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_package(Tesseract REQUIRED)
 
-file(GLOB_RECURSE SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+set(HEADERS
+        "src/common/command.h" 
+        "src/common/cv_utils.h"
+        "src/common/finalizer.hpp" 
+        "src/common/hr_line.h"
+        "src/common/time_utils.h"
+
+        "src/mumu/external_renderer_ipc.h"
+        "src/mumu/input_event_codes.h"
+        "src/mumu/mumu_client.h"
+        "src/mumu/mumu_lib_loader.h"
+
+        "src/ocr/ocr_utils.h"
+
+        "src/player/auto_player.h" 
+        "src/player/auto_play_constant.h" 
+        "src/player/display_manager.h"
+        "src/player/note_finder.h" 
+        "src/player/note_sample.h" 
+        "src/player/note_time_estimator.h"
+        "src/player/song_utils.h"
+        
+        "src/screen/events.h" 
+        "src/screen/i_screen.h"
+        
+        "src/story/story_auto_reader.h"
+
+        "src/sus/score_touch.h"
+        "src/sus/sus_loader.h"
+
+        "src/test/psh_test.hpp"
+
+        "src/touch/i_touch.h"
+        "src/touch/mini_touch_client.h"
+        
+        "src/window/main_window.h" 
+        "src/window/qt_log_sink.h"
 )
-file(GLOB_RECURSE HEADERS
-        "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp"
+set(SOURCES
+        "src/common/command.cpp"
+        "src/common/cv_utils.cpp"
+        "src/common/time_utils.cpp" 
+        "src/common/hr_line.cpp"
+
+        "src/mumu/mumu_lib_loader.cpp"
+        "src/mumu/mumu_client.cpp"
+
+        "src/ocr/ocr_utils.cpp"
+
+        "src/player/auto_player.cpp"
+        "src/player/display_manager.cpp"
+        "src/player/note_finder.cpp" 
+        "src/player/note_sample.cpp" 
+        "src/player/note_time_estimator.cpp"
+        "src/player/song_utils.cpp"
+        
+        "src/screen/events.cpp" 
+        "src/screen/i_screen.cpp"
+
+        "src/story/story_auto_reader.cpp"
+        
+        "src/sus/score_touch.cpp"
+        "src/sus/sus_loader.cpp"
+
+        "src/touch/i_touch.cpp"
+        "src/touch/mini_touch_client.cpp"
+
+        "src/window/main_window.cpp" 
+        "src/window/qt_log_sink.cpp"
+
+        "src/main.cpp"
 )
-file(GLOB UI_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/form/*.ui"
+set(QRC_FILES
+        "resource/events.qrc"
 )
-file(GLOB QRC_FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/resource/*.qrc"
-)
+
+add_subdirectory(depends/MikuMikuWorld)
 
 add_executable(${PROJECT_NAME}
-        ${SOURCES}
         ${HEADERS}
-        ${UI_FILES}
+        ${SOURCES}
         ${QRC_FILES}
 )
 
-target_include_directories(${PROJECT_NAME} PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/common
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/image
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/mumu
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/player
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/screen
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/touch
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/window
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_link_libraries(${PROJECT_NAME}
         PRIVATE
         Qt6::Widgets
+        Qt6::Network
         ${OpenCV_LIBS}
         spdlog::spdlog_header_only
+        Tesseract::libtesseract
+        MikuMikuWorld
 )
 
 if (WIN32)
@@ -95,6 +150,17 @@ if (WIN32)
             )
         endforeach ()
     endif ()
+
+    set(TESSDATA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resource/tessdata")
+    set(TESSDATA_TARGET_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>/tessdata")
+    if (EXISTS ${TESSDATA_SOURCE_DIR})
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${TESSDATA_TARGET_DIR}
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${TESSDATA_SOURCE_DIR}
+                ${TESSDATA_TARGET_DIR}
+        )
+    endif ()
 endif ()
 
 install(TARGETS ${PROJECT_NAME}
@@ -106,3 +172,5 @@ if (WIN32)
     set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
     install(PROGRAMS $<TARGET_FILE:${PROJECT_NAME}> DESTINATION bin)
 endif ()
+
+set_target_properties(${PROJECT_NAME} PROPERTIES COMPILE_FLAGS "/EHsc")

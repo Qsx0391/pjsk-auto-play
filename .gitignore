@@ -367,3 +367,5 @@ FodyWeavers.xsd
 
 # Vscode
 .vscode/
+
+resource/tessdata

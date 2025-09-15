@@ -1,0 +1,7 @@
+{
+  "buttons": {
+    "solo_live": [768, 242],
+    "multi_live": [1067, 258],
+    "challenge_live": [765, 395]
+  }
+}

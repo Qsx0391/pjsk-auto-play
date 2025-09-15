@@ -7,17 +7,47 @@
 #include <sstream>
 #include <thread>
 #include <chrono>
-#include <QProcess>
 
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
+#include <common/command.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
 namespace psh {
 
+MiniTouchCommand::MiniTouchCommand(MiniTouchClient& touch)
+    : touch_(touch) {}
+
+MiniTouchCommand& MiniTouchCommand::U(
+    int tid) {
+    buffer_ += "u " + std::to_string(tid) + "\n";
+    return *this;
+}
+
+MiniTouchCommand& MiniTouchCommand::D(
+    int tid, cv::Point pos) {
+    buffer_ += "d " + std::to_string(tid) + " " +
+               std::to_string(touch_.TouchY(pos.y)) + " " +
+               std::to_string(pos.x) + " 50\n";
+    return *this;
+}
+
+MiniTouchCommand& MiniTouchCommand::M(
+    int tid, cv::Point pos) {
+    buffer_ += "m " + std::to_string(tid) + " " +
+               std::to_string(touch_.TouchY(pos.y)) + " " +
+               std::to_string(pos.x) + " 50\n";
+    return *this;
+}
+
+MiniTouchCommand& MiniTouchCommand::C() {
+    buffer_ += "c\n";
+    return *this;
+}
+
 MiniTouchClient::MiniTouchClient(const QString& host, int port,
                                  int screen_height)
-    : ITouch(kSlotIndexBegin, kSlotIndexBegin), screen_height_(screen_height) {
+    : screen_height_(screen_height) {
     WSADATA wsa_data;
     int ret = WSAStartup(MAKEWORD(2, 2), &wsa_data);
     if (ret != 0) {
@@ -49,14 +79,6 @@ MiniTouchClient::~MiniTouchClient() {
     WSACleanup();
 }
 
-int MiniTouchClient::TouchDown(cv::Point pos) {
-    int slot_index = GetSlot();
-    if (slot_index == -1) {
-        MiniTouchCommand(*this).D(slot_index, pos).C().Send();
-    }
-    return slot_index;
-}
-
 void MiniTouchClient::TouchDown(int slot_index, cv::Point pos) {
     if (slot_index == -1) {
         MiniTouchCommand(*this).D(slot_index, pos).C().Send();
@@ -66,11 +88,10 @@ void MiniTouchClient::TouchDown(int slot_index, cv::Point pos) {
 void MiniTouchClient::TouchUp(int slot_index) {
     if (slot_index != -1) {
         MiniTouchCommand(*this).U(slot_index).C().Send();
-        ReleaseSlot(slot_index);
     }
 }
 
-void MiniTouchClient::TouchMove(cv::Point pos, int slot_index) {
+void MiniTouchClient::TouchMove(int slot_index, cv::Point pos) {
     if (slot_index != -1) {
         MiniTouchCommand(*this).M(slot_index, pos).Send();
     }
@@ -87,25 +108,6 @@ void MiniTouchClient::Close() {
 void MiniTouchClient::StartMiniTouchService(const QString& mumu_path,
                                             int adb_port, int service_port) {
     QString adb_path = mumu_path + "/shell/adb.exe";
-
-    auto ExecCommand = [&](const QString& program,
-                           const QStringList& cmd) -> QString {
-        QProcess p;
-        p.setCreateProcessArgumentsModifier(
-            [](QProcess::CreateProcessArguments* args) {
-                args->flags |= CREATE_NO_WINDOW;
-            });
-        p.start(program, QStringList{cmd});
-        if (!p.waitForFinished()) {
-            auto s = p.errorString();
-            spdlog::error("QProcess error: {}",
-                          p.errorString().toUtf8().constData());
-            throw std::runtime_error("QProcess timeout");
-        }
-        QByteArray stdOut = p.readAllStandardOutput();
-        QByteArray stdErr = p.readAllStandardError();
-        return QString::fromLocal8Bit(stdOut + stdErr);
-    };
 
     auto KillADB = [&]() -> bool {
         QString result =
@@ -169,41 +171,11 @@ void MiniTouchClient::SendCommand(const std::string& cmd) {
     }
 }
 
-MiniTouchClient::MiniTouchCommand MiniTouchClient::Command() {
+MiniTouchCommand MiniTouchClient::Command() {
     return MiniTouchCommand(*this);
 }
 
-MiniTouchClient::MiniTouchCommand::MiniTouchCommand(MiniTouchClient& touch)
-    : touch_(touch) {}
-
-MiniTouchClient::MiniTouchCommand& MiniTouchClient::MiniTouchCommand::U(
-    int tid) {
-    buffer_ += "u " + std::to_string(tid) + "\n";
-    return *this;
-}
-
-MiniTouchClient::MiniTouchCommand& MiniTouchClient::MiniTouchCommand::D(
-    int tid, cv::Point pos) {
-    buffer_ += "d " + std::to_string(tid) + " " +
-               std::to_string(touch_.TouchY(pos.y)) + " " +
-               std::to_string(pos.x) + " 50\n";
-    return *this;
-}
-
-MiniTouchClient::MiniTouchCommand& MiniTouchClient::MiniTouchCommand::M(
-    int tid, cv::Point pos) {
-    buffer_ += "m " + std::to_string(tid) + " " +
-               std::to_string(touch_.TouchY(pos.y)) + " " +
-               std::to_string(pos.x) + " 50\n";
-    return *this;
-}
-
-MiniTouchClient::MiniTouchCommand& MiniTouchClient::MiniTouchCommand::C() {
-    buffer_ += "c\n";
-    return *this;
-}
-
-void MiniTouchClient::MiniTouchCommand::Send() {
+void MiniTouchCommand::Send() {
     touch_.SendCommand(buffer_);
     buffer_.clear();
 }

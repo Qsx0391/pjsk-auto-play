@@ -8,7 +8,9 @@
       "description": "Debug build with Qt support",
       "binaryDir": "${sourceDir}/out/build/debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "E:/Qsx/git-repo/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
     },
     {
@@ -18,7 +20,9 @@
       "description": "Release build with Qt support",
       "binaryDir": "${sourceDir}/out/build/release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "E:/Qsx/git-repo/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
     },
     {
@@ -28,7 +32,9 @@
       "description": "Release build with debug info",
       "binaryDir": "${sourceDir}/out/build/relwithdebinfo",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_TOOLCHAIN_FILE": "E:/Qsx/git-repo/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
     },
     {
@@ -94,7 +100,7 @@
   ],
   "vendor": {
     "qt-project.org/Presets": {
-      "checksum": "l0AXwJn4bocoSftFcSeRPBka+OQ="
+      "checksum": "ILZ08lAxXNKfChoFWR/MUbqFHyM="
     }
   }
 }

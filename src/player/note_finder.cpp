@@ -1,65 +1,109 @@
-#include "note_finder.h"
+#include "player/note_finder.h"
+
+#include "common/cv_utils.h"
+
+namespace {
+
+cv::Point CenterOf(const cv::Rect &rect) { return (rect.tl() + rect.br()) / 2; }
+
+} // namespace
 
 namespace psh {
 
-QString NoteTypeToString(NoteType type) {
-    switch (type) {
-        case NoteType::Tap: return "Tap";
-        case NoteType::Hold: return "Hold";
-        case NoteType::Slide: return "Slide";
-        case NoteType::Yellow: return "Yellow";
-        default: return "Unknown";
-    }
+NoteFinder::NoteFinder(NoteTimeEstimator &estimator,
+                       const TrackConfig &track_config)
+    : estimator_(estimator), tc_(track_config) {
+    HrLine track_upper = TrackLineOf(0);
+    HrLine track_lower = TrackLineOf(tc_.height);
+    HrLine check_upper = TrackLineOf(tc_.check_upper_y);
+    HrLine check_lower = TrackLineOf(tc_.check_lower_y);
+    hit_line_ = TrackLineOf(tc_.hit_line_y);
+
+    auto build_mask = [](const HrLine& upper, const HrLine& lower, cv::Rect& area, cv::Mat& mask) {
+		area = cv::Rect(lower.pos.x, upper.pos.y, lower.length,
+						lower.pos.y - upper.pos.y);
+		mask = cv::Mat::zeros(area.height, area.width, CV_8UC1);
+		std::vector<std::vector<cv::Point>> mask_pts = {
+			{upper.Left() - area.tl(), upper.Right() - area.tl(),
+			 lower.Right() - area.tl(), lower.Left() - area.tl()}};
+		cv::fillPoly(mask, mask_pts, cv::Scalar(255));
+	};
+
+    build_mask(track_upper, track_lower, track_area_, track_mask_);
+    build_mask(check_upper, check_lower, check_area_, check_mask_);
 }
 
-NoteFinder::NoteFinder(int tolerance)
-    : lower_bound_(kNoteColors), upper_bound_(kNoteColors) {
-    float t = static_cast<float>(tolerance);
+std::vector<std::pair<NoteColor, std::vector<Note>>> NoteFinder::FindAllNotes(
+    const Frame &frame) {
+    cv::Mat check_img;
+    frame.img(check_area_).copyTo(check_img, check_mask_);
+    std::vector<std::pair<NoteColor, std::vector<Note>>> ret;
+
     for (int i = 0; i < kNoteColors.size(); ++i) {
-        lower_bound_[i] -= cv::Scalar{t, t, t};
-        upper_bound_[i] += cv::Scalar{t, t, t};
-    }
-}
+        NoteColor color_enum = static_cast<NoteColor>(i);
+        const cv::Scalar &color = kNoteColors[i];
 
-std::vector<cv::Point> NoteFinder::FindNotes(const cv::Mat &img,
-                                             NoteType type) {
-    int index = static_cast<int>(type);
-    cv::Mat mask;
-    cv::inRange(img, lower_bound_[index], upper_bound_[index], mask);
-    cv::findContours(mask, note_contours_, cv::RETR_EXTERNAL,
-                     cv::CHAIN_APPROX_SIMPLE);
-    std::vector<cv::Point> ret;
-    for (const auto &contour : note_contours_) {
-        cv::Rect note_box = cv::boundingRect(contour);
-        if (note_box.width < kMinNoteWidth) {
-            continue;
+        std::vector<Note> notes;
+        cv::Mat mask = CreateMask(check_img, color, kTapColorDelta);
+        cv::findContours(mask, note_contours_, cv::RETR_EXTERNAL,
+                         cv::CHAIN_APPROX_SIMPLE);
+        for (const auto &contour : note_contours_) {
+            cv::Rect box = cv::boundingRect(contour) + check_area_.tl();
+            cv::Point pos = CenterOf(box);
+            if (box.width >= kMinNoteWidth) {
+                // clang-format off
+                Note note;
+                note.color       = color_enum;
+                note.box         = box;
+                note.hit_pos     = hit_line_.PosOf(TrackLineOf(pos.y), pos);
+                note.hit_time_ms = estimator_.EstimateHitTime(pos.y) + frame.capture_time_ms;
+                note.hold        = FindHoldType(frame, color_enum, box);
+                note.is_slide    = color_enum == NoteColor::Red || color_enum == NoteColor::Yellow;
+                // clang-format on
+                notes.push_back(note);
+            }
         }
-        int x = note_box.x + note_box.width / 2;
-        int y = note_box.y + note_box.height / 2;
-        ret.emplace_back(x, y);
+        ret.emplace_back(color_enum, std::move(notes));
     }
-    /*
-    if (type == NoteType::Tap) {
-        for (const auto& pos : ret) {
-            cv::circle(mask, pos, 2, cv::Scalar(0, 0, 255), -1);
-        }
-        cv::imshow("test", mask);
-        cv::waitKey(1);
-    }
-    */
+
     return ret;
 }
 
-std::vector<std::pair<NoteType, cv::Point>> NoteFinder::FindAllNotes(
-    const cv::Mat &img) {
-    std::vector<std::pair<NoteType, cv::Point>> ret;
-    for (int i = 0; i < kNoteColors.size(); ++i) {
-		std::vector<cv::Point> notes = FindNotes(img, static_cast<NoteType>(i));
-		for (const auto &note : notes) {
-			ret.emplace_back(static_cast<NoteType>(i), note);
-		}
-	}
-    return ret;
+cv::Mat NoteFinder::GetTrackImg(const cv::Mat &img) const { 
+	cv::Mat track_img;
+	img(track_area_).copyTo(track_img, track_mask_);
+	return track_img;
+}
+
+HoldType NoteFinder::FindHoldType(const Frame &frame, NoteColor color,
+                                  cv::Rect rect) {
+    if (color == NoteColor::Blue) {
+        return HoldType::None;
+    }
+
+    HoldColor hold_color =
+        color == NoteColor::Yellow ? HoldColor::Yellow : HoldColor::Green;
+    const cv::Vec3b &target = kHoldColors[static_cast<int>(hold_color)];
+
+    cv::Vec3b lower = frame.img.at<cv::Vec3b>(
+        CenterOf(rect) + cv::Point{0, kHoldCheckDY + rect.height / 2});
+    if (ColorSimilar(lower, target, kHoldColorDelta)) {
+        return HoldType::HoldEnd;
+    }
+
+    cv::Vec3b upper = frame.img.at<cv::Vec3b>(
+        CenterOf(rect) - cv::Point{0, kHoldCheckDY + rect.height / 2});
+    if (ColorSimilar(upper, target, kHoldColorDelta)) {
+        return HoldType::HoldBegin;
+    }
+
+    return HoldType::None;
+}
+
+HrLine NoteFinder::TrackLineOf(int line_y) const {
+    int a =
+        (tc_.lower_len - tc_.upper_len) * (tc_.height - line_y) / tc_.height;
+    return HrLine{cv::Point{tc_.dx + a / 2, line_y}, tc_.lower_len - a};
 }
 
 } // namespace psh
